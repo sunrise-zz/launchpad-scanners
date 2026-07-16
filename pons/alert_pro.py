@@ -52,6 +52,27 @@ BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
 
 
 _SUPPLY = {}   # token -> total supply (constant, cached via on-chain call)
+_HOLDERS = {}  # token -> (fetched_ts, count) — short-lived cache
+BS_TOKEN_API = "https://robinhoodchain.blockscout.com/api/v2/tokens/"
+
+
+def holders(token, now, ttl=60):
+    """Live holder count from Blockscout (cached `ttl` seconds). None on failure."""
+    hit = _HOLDERS.get(token)
+    if hit and (now - hit[0]) < ttl:
+        return hit[1]
+    n = None
+    try:
+        import urllib.request
+        req = urllib.request.Request(BS_TOKEN_API + token,
+                                     headers={"user-agent": "Mozilla/5.0", "accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read())
+        n = int(d.get("holders_count") or d.get("holders") or 0) or None
+    except Exception:  # noqa: BLE001
+        n = hit[1] if hit else None
+    _HOLDERS[token] = (now, n)
+    return n
 
 
 def total_supply(token):
@@ -82,13 +103,15 @@ def age_str(launched_at, now):
 
 
 def glance(token, price, paired, pct, launched_at, now, ethusd):
-    """One-line at-a-glance: market cap · liquidity · age · graduation progress."""
+    """One-line at-a-glance: market cap · holders · liquidity · age · progress."""
     sup = total_supply(token)
     mc = human_usd(price * sup) if (price and sup) else "?"
+    h = holders(token, now)
+    hstr = f" · 👥 {h} holders" if h else ""
     liq = f"{paired:.2f} ETH" if paired else "?"
     liq_usd = f" ({human_usd(paired*ethusd)})" if (paired and ethusd) else ""
     prog = f"{pct:.0f}% to grad" if pct is not None else "pre-curve"
-    return f"💰 mc {mc} · 💧 liq {liq}{liq_usd} · ⏱️ {age_str(launched_at, now)} · 📊 {prog}"
+    return f"💰 mc {mc}{hstr} · 💧 liq {liq}{liq_usd} · ⏱️ {age_str(launched_at, now)} · 📊 {prog}"
 
 
 def links(token, pool=None):
@@ -210,7 +233,7 @@ def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0):
         f"🎯 <b>CONFIRMED</b> — <b>{sym}</b>",
         glance(c.token, c.price, c.paired, c.pct, c.launched_at, now, ethusd),
         f"✅ rebuyers <b>{c.rebuyers}</b> (≥{args.rebuyers}) · net <b>{c.net_weth:+.2f}</b> ETH · snipers <b>{c.snipers}</b> (≤{args.snipers})",
-        f"👥 buyers {len(c.buyers)} · top-share {c.top_share:.0%} · 🧠 smart-money <b>{len(c.smart_hits)}</b>",
+        f"🛒 early buyers {len(c.buyers)} · top-share {c.top_share:.0%} · 🧠 smart-money <b>{len(c.smart_hits)}</b>",
         f"🧑‍💻 dev: {dev_note}{held}",
         f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>  (backtest winrate ~30%, +net-hold guard)',
     ])
