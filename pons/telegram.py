@@ -51,19 +51,29 @@ def load_creds():
     return None, None
 
 
-def send(text, token=None, chat_id=None, timeout=10, parse_mode="HTML", disable_preview=True):
-    """Send a message. Returns (ok: bool, info: str)."""
+def send(text, token=None, chat_id=None, timeout=10, parse_mode="HTML",
+         disable_preview=True, buttons=None):
+    """Send a message. Returns (ok: bool, info: str).
+
+    buttons: optional inline keyboard as a list of rows, each row a list of
+    (label, url) tuples -> rendered as clickable URL buttons under the message.
+    """
     if token is None or chat_id is None:
         token, chat_id = load_creds()
     if not token or not chat_id:
         return False, "no credentials (set env TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID or data/telegram.json)"
     url = f"https://api.telegram.org/bot{token}/sendMessage"
-    data = urllib.parse.urlencode({
+    payload = {
         "chat_id": chat_id,
         "text": text,
         "parse_mode": parse_mode,
         "disable_web_page_preview": "true" if disable_preview else "false",
-    }).encode()
+    }
+    if buttons:
+        payload["reply_markup"] = json.dumps({
+            "inline_keyboard": [[{"text": lbl, "url": u} for lbl, u in row] for row in buttons]
+        })
+    data = urllib.parse.urlencode(payload).encode()
     try:
         with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout) as r:
             body = json.loads(r.read())

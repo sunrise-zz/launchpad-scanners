@@ -51,6 +51,17 @@ ACTIVE_SECS = 15 * 60
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
 
 
+def links(token, pool=None):
+    """Inline-keyboard rows for a coin. DexScreener + pons are the ones that
+    actually have Robinhood Chain data; GMGN is included on request but does not
+    index this chain yet, so it may show no data."""
+    row1 = [("📈 DexScreener", f"https://dexscreener.com/robinhood/{pool or token}"),
+            ("🐸 pons", f"https://pons.family/launchpad/{token}")]
+    row2 = [("🔎 GMGN", f"https://gmgn.ai/robinhood/token/{token}"),
+            ("🔗 Scan", f"{BLOCKSCOUT}{token}")]
+    return [row1, row2]
+
+
 def sint(h):
     v = int(h, 16)
     return v - (1 << 256) if v >= (1 << 255) else v
@@ -188,12 +199,12 @@ def main():
     near_sent = {}      # token -> ts
     prog_hist = defaultdict(list)  # token -> [(t, paired)]
 
-    def dispatch(text, label):
+    def dispatch(text, label, buttons=None):
         stamp = time.strftime("%H:%M:%S")
         if dry:
             print(f"[{stamp}] DRY {label}\n" + text, flush=True)
             return
-        ok, info = telegram.send(text, token_tg, chat_id)
+        ok, info = telegram.send(text, token_tg, chat_id, buttons=buttons)
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 
     def register_launches():
@@ -236,7 +247,8 @@ def main():
             if c.rebuyers >= args.rebuyers and c.net_weth >= args.net and c.snipers <= args.snipers:
                 c.confirmed = True
                 dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args),
-                         f"CONFIRMED {c.symbol or c.token[:8]}")
+                         f"CONFIRMED {c.symbol or c.token[:8]}",
+                         buttons=links(c.token, c.pool))
 
     def check_neargrad(now):
         try:
@@ -266,7 +278,8 @@ def main():
                 continue
             near_sent[tok] = now
             sym = coins[tok].symbol if tok in coins else (r.get("symbol") or tok[:8])
-            dispatch(fmt_neargrad(tok, sym, pct, paired, vel), f"NEAR-GRAD {sym or tok[:8]}")
+            dispatch(fmt_neargrad(tok, sym, pct, paired, vel), f"NEAR-GRAD {sym or tok[:8]}",
+                     buttons=links(tok, r.get("pool")))
 
     print("running… Ctrl-C to stop", flush=True)
     while True:
