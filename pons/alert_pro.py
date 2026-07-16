@@ -182,8 +182,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--interval", type=float, default=2.0)
     ap.add_argument("--rebuyers", type=int, default=6)
-    ap.add_argument("--net", type=float, default=1.0)
+    ap.add_argument("--net", type=float, default=1.5)
     ap.add_argument("--snipers", type=int, default=3)
+    ap.add_argument("--max-dev-launches", type=int, default=4,
+                    help="skip CONFIRMED if deployer has more prior launches than this AND 0 graduations")
     ap.add_argument("--near", type=float, default=70.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -192,8 +194,12 @@ def main():
     dry = args.dry_run or not (token_tg and chat_id)
     smart = load_smart()
     dep_counts = load_deployer_counts()
-    print(f"pons PRO scanner  rule: rebuyers>={args.rebuyers} & net>={args.net}ETH & snipers<={args.snipers}"
-          f"  smart-wallets={len(smart)}  -> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
+    dep_grads = {k.lower(): v for k, v in
+                 (json.load(open(os.path.join(DATA, "deployer_grads.json")))
+                  if os.path.exists(os.path.join(DATA, "deployer_grads.json")) else {}).items()}
+    print(f"pons PRO scanner  rule: rebuyers>={args.rebuyers} & net>={args.net}ETH & snipers<={args.snipers} "
+          f"& NOT(dev>{args.max_dev_launches} launches & 0 grads)  smart-wallets={len(smart)}  "
+          f"-> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
 
     coins = {}          # token -> CoinState
     near_sent = {}      # token -> ts
@@ -245,8 +251,18 @@ def main():
             c.ingest(logs, smart)
             c.cursor = head + 1
             if c.rebuyers >= args.rebuyers and c.net_weth >= args.net and c.snipers <= args.snipers:
+                # anti-spam gate: a serial deployer that has NEVER graduated is a
+                # spam factory (HOODCOIN post-mortem). Backtest: adding this +
+                # net>=1.5 lifts winrate 30% -> 53%.
+                launches = dep_counts.get(c.deployer, 1)
+                grads = dep_grads.get(c.deployer, 0)
+                if launches > args.max_dev_launches and grads == 0:
+                    c.confirmed = True  # stop re-checking, but do NOT alert
+                    print(f"[{time.strftime('%H:%M:%S')}] SKIP spam-deployer "
+                          f"{c.symbol or c.token[:8]} (dev x{launches}, 0 grads)", flush=True)
+                    continue
                 c.confirmed = True
-                dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args),
+                dispatch(fmt_confirmed(c, launches, args),
                          f"CONFIRMED {c.symbol or c.token[:8]}",
                          buttons=links(c.token, c.pool))
 
