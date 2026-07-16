@@ -51,6 +51,46 @@ ACTIVE_SECS = 15 * 60
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
 
 
+_SUPPLY = {}   # token -> total supply (constant, cached via on-chain call)
+
+
+def total_supply(token):
+    if token not in _SUPPLY:
+        try:
+            r = rpc("eth_call", [{"to": token, "data": "0x18160ddd"}, "latest"], timeout=10)
+            _SUPPLY[token] = int(r, 16) / 1e18
+        except Exception:  # noqa: BLE001
+            _SUPPLY[token] = None
+    return _SUPPLY[token]
+
+
+def human_usd(x):
+    if x is None:
+        return "?"
+    if x >= 1_000_000:
+        return f"${x/1e6:.1f}M"
+    if x >= 1_000:
+        return f"${x/1e3:.0f}K"
+    return f"${x:.0f}"
+
+
+def age_str(launched_at, now):
+    if not launched_at:
+        return "?"
+    s = now - launched_at
+    return f"{s/3600:.1f}h" if s >= 3600 else f"{int(s//60)}m"
+
+
+def glance(token, price, paired, pct, launched_at, now, ethusd):
+    """One-line at-a-glance: market cap · liquidity · age · graduation progress."""
+    sup = total_supply(token)
+    mc = human_usd(price * sup) if (price and sup) else "?"
+    liq = f"{paired:.2f} ETH" if paired else "?"
+    liq_usd = f" ({human_usd(paired*ethusd)})" if (paired and ethusd) else ""
+    prog = f"{pct:.0f}% to grad" if pct is not None else "pre-curve"
+    return f"💰 mc {mc} · 💧 liq {liq}{liq_usd} · ⏱️ {age_str(launched_at, now)} · 📊 {prog}"
+
+
 def links(token, pool=None):
     """Inline-keyboard rows for a coin. DexScreener + pons are the ones that
     actually have Robinhood Chain data; GMGN is included on request but does not
@@ -93,7 +133,7 @@ class CoinState:
     __slots__ = ("token", "pool", "launch_block", "deployer", "symbol", "launched_at",
                  "token_is_0", "cursor", "buyers", "rebuy", "buy_weth", "sell_weth",
                  "n_buys", "n_sells", "snipers", "smart_hits", "dev_sold", "confirmed",
-                 "dead", "pct", "paired", "pending_since", "fire_net")
+                 "dead", "pct", "paired", "price", "pending_since", "fire_net")
 
     def __init__(self, token, pool, launch_block, deployer, symbol, launched_at):
         self.token = token
@@ -117,6 +157,7 @@ class CoinState:
         self.dead = False
         self.pct = None
         self.paired = None
+        self.price = None
         self.pending_since = None   # wall-clock when the rule first passed
         self.fire_net = None        # net_weth at that moment (for the hold check)
 
@@ -157,28 +198,29 @@ class CoinState:
         return (max(self.buyers.values()) / self.buy_weth) if self.buy_weth > 0 else 1.0
 
 
-def fmt_confirmed(c, dep_count, args, fire_net=None):
+def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0):
     sym = html.escape(str(c.symbol or c.token[:8]))
     dev_note = "first launch" if dep_count <= 1 else f"⚠️ serial deployer x{dep_count}"
     if c.dev_sold:
         dev_note += " · ⚠️ dev SOLD"
-    prog = f" · progress {c.pct:.0f}%" if c.pct is not None else ""
     held = ""
     if fire_net is not None:
         held = f"\n🛡️ net held {fire_net:+.2f} → <b>{c.net_weth:+.2f}</b> after {args.hold:.0f}s (no dump)"
     return "\n".join([
         f"🎯 <b>CONFIRMED</b> — <b>{sym}</b>",
+        glance(c.token, c.price, c.paired, c.pct, c.launched_at, now, ethusd),
         f"✅ rebuyers <b>{c.rebuyers}</b> (≥{args.rebuyers}) · net <b>{c.net_weth:+.2f}</b> ETH · snipers <b>{c.snipers}</b> (≤{args.snipers})",
         f"👥 buyers {len(c.buyers)} · top-share {c.top_share:.0%} · 🧠 smart-money <b>{len(c.smart_hits)}</b>",
-        f"🧑‍💻 dev: {dev_note}{prog}{held}",
+        f"🧑‍💻 dev: {dev_note}{held}",
         f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>  (backtest winrate ~30%, +net-hold guard)',
     ])
 
 
-def fmt_neargrad(tok, sym, pct, paired, vel):
+def fmt_neargrad(tok, sym, pct, paired, vel, price=None, launched_at=None, ethusd=0, now=0):
     return "\n".join([
         f"🔥 <b>NEAR-GRAD</b> — <b>{html.escape(str(sym or tok[:8]))}</b>",
-        f"progress <b>{pct:.0f}%</b> · {paired:.2f}/{api.GRAD_THRESHOLD_ETH} ETH · vel {vel:+.2f} ETH/min",
+        glance(tok, price, paired, pct, launched_at, now, ethusd),
+        f"progress <b>{pct:.0f}%</b> · {paired:.2f}/{api.GRAD_THRESHOLD_ETH} ETH · vel <b>{vel:+.2f}</b> ETH/min",
         f'<a href="{BLOCKSCOUT}{tok}">{tok[:12]}…</a>',
     ])
 
@@ -217,6 +259,13 @@ def main():
     coins = {}          # token -> CoinState
     near_sent = {}      # token -> ts
     prog_hist = defaultdict(list)  # token -> [(t, paired)]
+
+    def eth_usd():
+        try:
+            return api.get(api.EP_MARKET, {"token": WETH}).get("ethUsd") or 1900.0
+        except Exception:  # noqa: BLE001
+            return 1900.0
+    ethusd = [eth_usd()]  # boxed so we can refresh it periodically
 
     def dispatch(text, label, buttons=None):
         stamp = time.strftime("%H:%M:%S")
@@ -287,7 +336,8 @@ def main():
                 held = c.net_weth >= c.fire_net * args.hold_keep
                 c.confirmed = True
                 if held:
-                    dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args, c.fire_net),
+                    dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args,
+                                           c.fire_net, ethusd[0], now),
                              f"CONFIRMED {c.symbol or c.token[:8]}",
                              buttons=links(c.token, c.pool))
                 else:
@@ -305,9 +355,13 @@ def main():
             tok = r["token"].lower()
             pct = r.get("graduationProgressPct") or 0
             paired = r.get("pairedPrincipalEth") or 0.0
+            price = r.get("priceUsd")
+            launched_at = None
             if tok in coins:
                 coins[tok].pct = pct
                 coins[tok].paired = paired
+                coins[tok].price = price
+                launched_at = coins[tok].launched_at
             prog_hist[tok].append((now, paired))
             if len(prog_hist[tok]) > 10:
                 prog_hist[tok] = prog_hist[tok][-10:]
@@ -323,13 +377,18 @@ def main():
                 continue
             near_sent[tok] = now
             sym = coins[tok].symbol if tok in coins else (r.get("symbol") or tok[:8])
-            dispatch(fmt_neargrad(tok, sym, pct, paired, vel), f"NEAR-GRAD {sym or tok[:8]}",
+            dispatch(fmt_neargrad(tok, sym, pct, paired, vel, price, launched_at, ethusd[0], now),
+                     f"NEAR-GRAD {sym or tok[:8]}",
                      buttons=links(tok, r.get("pool")))
 
     print("running… Ctrl-C to stop", flush=True)
+    last_eth = [time.time()]
     while True:
         try:
             now = time.time()
+            if now - last_eth[0] > 300:      # refresh ETH price every 5 min
+                ethusd[0] = eth_usd()
+                last_eth[0] = now
             register_launches()
             update_swaps(now)
             check_neargrad(now)
