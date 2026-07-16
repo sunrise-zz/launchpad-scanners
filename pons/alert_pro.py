@@ -182,7 +182,10 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--interval", type=float, default=2.0)
     ap.add_argument("--rebuyers", type=int, default=6)
-    ap.add_argument("--net", type=float, default=1.5)
+    # net kept at 1.0 (not 1.5): slow-build winners like RWC peak at ~1.4 net and
+    # would fire at ~15 min (or be missed) under a higher bar. The deployer
+    # anti-spam filter — not a higher net — is what removes pump-dumps (HOODCOIN).
+    ap.add_argument("--net", type=float, default=1.0)
     ap.add_argument("--snipers", type=int, default=3)
     ap.add_argument("--max-dev-launches", type=int, default=4,
                     help="skip CONFIRMED if deployer has more prior launches than this AND 0 graduations")
