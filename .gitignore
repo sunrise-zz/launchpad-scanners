@@ -1,0 +1,15 @@
+# secrets — never commit
+pons/.env
+pons/data/telegram.json
+
+# runtime artifacts
+*.log
+*.pid
+__pycache__/
+*.pyc
+
+# large raw datasets (regenerate with the collect scripts)
+vlad/data/events.json
+vlad/data/coins_rest.json
+pons/data/launches.json
+pons/data/early_swaps.json

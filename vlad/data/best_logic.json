@@ -1,0 +1,46 @@
+{
+  "logic": "deploy_momentum",
+  "mode": "momentum",
+  "window": 120,
+  "weights": {
+    "non_dev_buyers": 1.0,
+    "buy_eth": 1.0,
+    "buysell_ratio": 0.7,
+    "top_share": -0.7,
+    "dev_sold": -1.0
+  },
+  "standardize": {
+    "non_dev_buyers": [
+      2.7762237762237763,
+      11.997621897471143
+    ],
+    "buy_eth": [
+      0.22391734648522044,
+      0.8433468369225114
+    ],
+    "buysell_ratio": [
+      2.5657881564152802,
+      12.598497478170849
+    ],
+    "top_share": [
+      0.8931255705490256,
+      0.26663547263716614
+    ],
+    "dev_sold": [
+      0.06993006993006994,
+      0.25502912627707036
+    ]
+  },
+  "trigger": {
+    "window": 60,
+    "min_nondev_buyers": 5,
+    "escalate_nondev_buyers": 8,
+    "min_ratio": 1.5
+  },
+  "filters": {
+    "drop_if_dev_sold": true,
+    "max_top_share": 0.9
+  },
+  "winner_ath": 10000.0,
+  "note": "score = sum(w * (feature-mean)/std); features from trades within `window`s of Launched"
+}
