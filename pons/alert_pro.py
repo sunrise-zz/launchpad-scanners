@@ -93,7 +93,7 @@ class CoinState:
     __slots__ = ("token", "pool", "launch_block", "deployer", "symbol", "launched_at",
                  "token_is_0", "cursor", "buyers", "rebuy", "buy_weth", "sell_weth",
                  "n_buys", "n_sells", "snipers", "smart_hits", "dev_sold", "confirmed",
-                 "dead", "pct", "paired")
+                 "dead", "pct", "paired", "pending_since", "fire_net")
 
     def __init__(self, token, pool, launch_block, deployer, symbol, launched_at):
         self.token = token
@@ -117,6 +117,8 @@ class CoinState:
         self.dead = False
         self.pct = None
         self.paired = None
+        self.pending_since = None   # wall-clock when the rule first passed
+        self.fire_net = None        # net_weth at that moment (for the hold check)
 
     def ingest(self, logs, smart):
         for lg in logs:
@@ -155,18 +157,21 @@ class CoinState:
         return (max(self.buyers.values()) / self.buy_weth) if self.buy_weth > 0 else 1.0
 
 
-def fmt_confirmed(c, dep_count, args):
+def fmt_confirmed(c, dep_count, args, fire_net=None):
     sym = html.escape(str(c.symbol or c.token[:8]))
     dev_note = "first launch" if dep_count <= 1 else f"⚠️ serial deployer x{dep_count}"
     if c.dev_sold:
         dev_note += " · ⚠️ dev SOLD"
     prog = f" · progress {c.pct:.0f}%" if c.pct is not None else ""
+    held = ""
+    if fire_net is not None:
+        held = f"\n🛡️ net held {fire_net:+.2f} → <b>{c.net_weth:+.2f}</b> after {args.hold:.0f}s (no dump)"
     return "\n".join([
         f"🎯 <b>CONFIRMED</b> — <b>{sym}</b>",
-        f"✅ rebuyers <b>{c.rebuyers}</b> (≥{args.rebuyers}) · net <b>{c.net_weth:+.2f}</b> ETH (≥{args.net}) · snipers <b>{c.snipers}</b> (≤{args.snipers})",
+        f"✅ rebuyers <b>{c.rebuyers}</b> (≥{args.rebuyers}) · net <b>{c.net_weth:+.2f}</b> ETH · snipers <b>{c.snipers}</b> (≤{args.snipers})",
         f"👥 buyers {len(c.buyers)} · top-share {c.top_share:.0%} · 🧠 smart-money <b>{len(c.smart_hits)}</b>",
-        f"🧑‍💻 dev: {dev_note}{prog}",
-        f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>  (backtest winrate ~30-40%)',
+        f"🧑‍💻 dev: {dev_note}{prog}{held}",
+        f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>  (backtest winrate ~30%, +net-hold guard)',
     ])
 
 
@@ -189,6 +194,11 @@ def main():
     ap.add_argument("--snipers", type=int, default=3)
     ap.add_argument("--max-dev-launches", type=int, default=4,
                     help="skip CONFIRMED if deployer has more prior launches than this AND 0 graduations")
+    # net-hold guard: after the rule first passes, wait `hold` seconds and only
+    # alert if net is still >= hold_keep x its fire-time value (drops pump-dumps).
+    # Backtest: fp 33 -> 8, winners 45 -> 43, precision 10% -> 32%.
+    ap.add_argument("--hold", type=float, default=120.0)
+    ap.add_argument("--hold-keep", type=float, default=1.0)
     ap.add_argument("--near", type=float, default=70.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -201,8 +211,8 @@ def main():
                  (json.load(open(os.path.join(DATA, "deployer_grads.json")))
                   if os.path.exists(os.path.join(DATA, "deployer_grads.json")) else {}).items()}
     print(f"pons PRO scanner  rule: rebuyers>={args.rebuyers} & net>={args.net}ETH & snipers<={args.snipers} "
-          f"& NOT(dev>{args.max_dev_launches} launches & 0 grads)  smart-wallets={len(smart)}  "
-          f"-> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
+          f"& NOT(dev>{args.max_dev_launches} launches & 0 grads) & net-hold {args.hold:.0f}s(keep {args.hold_keep:.0%})  "
+          f"smart-wallets={len(smart)}  -> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
 
     coins = {}          # token -> CoinState
     near_sent = {}      # token -> ts
@@ -231,8 +241,9 @@ def main():
 
     def update_swaps(now):
         active = [c for c in coins.values()
-                  if not c.dead and not c.confirmed
-                  and c.launched_at and (now - c.launched_at) <= ACTIVE_SECS]
+                  if not c.dead and not c.confirmed and c.launched_at
+                  # keep polling young coins, and any pending coin until its hold resolves
+                  and ((now - c.launched_at) <= ACTIVE_SECS or c.pending_since is not None)]
         if not active:
             return
         try:
@@ -253,21 +264,36 @@ def main():
                 continue
             c.ingest(logs, smart)
             c.cursor = head + 1
-            if c.rebuyers >= args.rebuyers and c.net_weth >= args.net and c.snipers <= args.snipers:
-                # anti-spam gate: a serial deployer that has NEVER graduated is a
-                # spam factory (HOODCOIN post-mortem). Backtest: adding this +
-                # net>=1.5 lifts winrate 30% -> 53%.
+            rule_ok = (c.rebuyers >= args.rebuyers and c.net_weth >= args.net
+                       and c.snipers <= args.snipers)
+
+            # stage 1: rule passes for the first time -> start the net-hold watch
+            if rule_ok and c.pending_since is None:
                 launches = dep_counts.get(c.deployer, 1)
                 grads = dep_grads.get(c.deployer, 0)
+                # anti-spam gate: serial deployer that never graduated = spam factory
                 if launches > args.max_dev_launches and grads == 0:
-                    c.confirmed = True  # stop re-checking, but do NOT alert
+                    c.confirmed = True  # stop re-checking, never alert
                     print(f"[{time.strftime('%H:%M:%S')}] SKIP spam-deployer "
                           f"{c.symbol or c.token[:8]} (dev x{launches}, 0 grads)", flush=True)
                     continue
+                c.pending_since = now
+                c.fire_net = c.net_weth
+                print(f"[{time.strftime('%H:%M:%S')}] PENDING {c.symbol or c.token[:8]} "
+                      f"net={c.fire_net:.2f} — hold {args.hold:.0f}s", flush=True)
+
+            # stage 2: hold elapsed -> confirm only if net did NOT collapse
+            if c.pending_since is not None and (now - c.pending_since) >= args.hold:
+                held = c.net_weth >= c.fire_net * args.hold_keep
                 c.confirmed = True
-                dispatch(fmt_confirmed(c, launches, args),
-                         f"CONFIRMED {c.symbol or c.token[:8]}",
-                         buttons=links(c.token, c.pool))
+                if held:
+                    dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args, c.fire_net),
+                             f"CONFIRMED {c.symbol or c.token[:8]}",
+                             buttons=links(c.token, c.pool))
+                else:
+                    print(f"[{time.strftime('%H:%M:%S')}] DROP pump-dump "
+                          f"{c.symbol or c.token[:8]} (net {c.fire_net:.2f} -> {c.net_weth:.2f})",
+                          flush=True)
 
     def check_neargrad(now):
         try:
