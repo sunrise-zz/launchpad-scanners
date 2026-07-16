@@ -75,6 +75,43 @@ def holders(token, now, ttl=60):
     return n
 
 
+_RISK = {}  # token -> (ts, dict)
+
+
+def holder_risk(token, pool, deployer, now, ttl=60):
+    """GMGN-style holder concentration from Blockscout, excluding the bonding-curve
+    pool. Returns {dev_pct, top1_pct, top10_pct} as % of CIRCULATING supply, or {}.
+    """
+    hit = _RISK.get(token)
+    if hit and (now - hit[0]) < ttl:
+        return hit[1]
+    out = {}
+    try:
+        import urllib.request
+        req = urllib.request.Request(BS_TOKEN_API + token + "/holders",
+                                     headers={"user-agent": "Mozilla/5.0", "accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            items = json.loads(r.read()).get("items", [])
+        sup = total_supply(token)
+        if items and sup:
+            pool = (pool or "").lower()
+            dev = (deployer or "").lower()
+            bals = [(h["address"]["hash"].lower(), int(h["value"]) / 1e18) for h in items]
+            pool_bal = sum(b for a, b in bals if a == pool)
+            circ = sup - pool_bal
+            if circ > 0:
+                non_pool = sorted([(a, b) for a, b in bals if a != pool], key=lambda x: -x[1])
+                out = {
+                    "dev_pct": 100 * sum(b for a, b in bals if a == dev) / circ,
+                    "top1_pct": 100 * non_pool[0][1] / circ if non_pool else 0.0,
+                    "top10_pct": 100 * sum(b for _, b in non_pool[:10]) / circ,
+                }
+    except Exception:  # noqa: BLE001
+        out = hit[1] if hit else {}
+    _RISK[token] = (now, out)
+    return out
+
+
 def total_supply(token):
     if token not in _SUPPLY:
         try:
@@ -229,11 +266,18 @@ def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0):
     held = ""
     if fire_net is not None:
         held = f"\n🛡️ net held {fire_net:+.2f} → <b>{c.net_weth:+.2f}</b> after {args.hold:.0f}s (no dump)"
+    # holder concentration (GMGN-style rug check), excluding the curve pool
+    r = holder_risk(c.token, c.pool, c.deployer, now)
+    risk = ""
+    if r:
+        dv = f"dev {r['dev_pct']:.0f}%" + ("⚠️" if r["dev_pct"] >= 15 else "")
+        tw = f"top wallet {r['top1_pct']:.0f}%" + ("⚠️" if r["top1_pct"] >= 25 else "")
+        risk = f"\n🔒 {dv} · 🐋 {tw} · top10 {r['top10_pct']:.0f}%"
     return "\n".join([
         f"🎯 <b>CONFIRMED</b> — <b>{sym}</b>",
         glance(c.token, c.price, c.paired, c.pct, c.launched_at, now, ethusd),
         f"✅ rebuyers <b>{c.rebuyers}</b> (≥{args.rebuyers}) · net <b>{c.net_weth:+.2f}</b> ETH · snipers <b>{c.snipers}</b> (≤{args.snipers})",
-        f"🛒 early buyers {len(c.buyers)} · top-share {c.top_share:.0%} · 🧠 smart-money <b>{len(c.smart_hits)}</b>",
+        f"🛒 early buyers {len(c.buyers)} · 🧠 smart-money <b>{len(c.smart_hits)}</b>{risk}",
         f"🧑‍💻 dev: {dev_note}{held}",
         f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>  (backtest winrate ~30%, +net-hold guard)',
     ])
