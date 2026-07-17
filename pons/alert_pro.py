@@ -75,7 +75,44 @@ def holders(token, now, ttl=60):
     return n
 
 
-_RISK = {}  # token -> (ts, dict)
+_RISK = {}   # token -> (ts, dict)
+_SOCIAL = {}  # token -> (ts, dict)
+DEXSCR_TOKEN = "https://api.dexscreener.com/tokens/v1/robinhood/"
+
+
+def dex_socials(token, now, ttl=90):
+    """Socials/website from DexScreener (supports Robinhood chain). The single
+    strongest winner signal in the alert history: 78% of winners have an X
+    account vs 10% of coins that died. Returns {x, tg, web, has} (urls + bool)."""
+    hit = _SOCIAL.get(token)
+    if hit and (now - hit[0]) < ttl:
+        return hit[1]
+    out = {"x": None, "tg": None, "web": None, "has": False}
+    try:
+        import urllib.request
+        req = urllib.request.Request(DEXSCR_TOKEN + token,
+                                     headers={"user-agent": "Mozilla/5.0", "accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            pairs = json.loads(r.read())
+        info = {}
+        for p in (pairs or []):
+            if (p.get("info") or {}).get("socials") or (p.get("info") or {}).get("websites"):
+                info = p["info"]
+                break
+        for s in (info.get("socials") or []):
+            t = (s.get("type") or "").lower()
+            if t in ("twitter", "x"):
+                out["x"] = s.get("url")
+            elif t == "telegram":
+                out["tg"] = s.get("url")
+        ws = info.get("websites") or []
+        if ws:
+            out["web"] = ws[0].get("url") if isinstance(ws[0], dict) else ws[0]
+        out["has"] = bool(out["x"] or out["web"])
+    except Exception:  # noqa: BLE001
+        out = hit[1] if hit else out
+    _SOCIAL[token] = (now, out)
+    return out
 
 
 def holder_risk(token, pool, deployer, now, ttl=60):
@@ -151,15 +188,17 @@ def glance(token, price, paired, pct, launched_at, now, ethusd):
     return f"💰 mc {mc}{hstr} · 💧 liq {liq}{liq_usd} · ⏱️ {age_str(launched_at, now)} · 📊 {prog}"
 
 
-def links(token, pool=None):
-    """Inline-keyboard rows for a coin. DexScreener + pons are the ones that
-    actually have Robinhood Chain data; GMGN is included on request but does not
-    index this chain yet, so it may show no data."""
+def links(token, pool=None, soc=None):
+    """Inline-keyboard rows for a coin. DexScreener + pons have Robinhood Chain
+    data; GMGN is included on request. An X button is added when the coin has one."""
     row1 = [("📈 DexScreener", f"https://dexscreener.com/robinhood/{pool or token}"),
             ("🐸 pons", f"https://pons.family/launchpad/{token}")]
     row2 = [("🔎 GMGN", f"https://gmgn.ai/robinhood/token/{token}"),
             ("🔗 Scan", f"{BLOCKSCOUT}{token}")]
-    return [row1, row2]
+    rows = [row1, row2]
+    if soc and soc.get("x"):
+        rows.insert(0, [("🐦 X account", soc["x"])])
+    return rows
 
 
 def sint(h):
@@ -258,7 +297,22 @@ class CoinState:
         return (max(self.buyers.values()) / self.buy_weth) if self.buy_weth > 0 else 1.0
 
 
-def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0):
+def social_line(soc):
+    if not soc:
+        return "🔗 socials: ？"
+    if not soc.get("has"):
+        return "🔗 socials: <b>⚠️ none</b> (90% of dead coins have no X/web)"
+    parts = []
+    if soc.get("x"):
+        parts.append("🐦 X")
+    if soc.get("web"):
+        parts.append("🌐 web")
+    if soc.get("tg"):
+        parts.append("💬 TG")
+    return "🔗 " + " · ".join(parts) + "  ✅"
+
+
+def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None):
     sym = html.escape(str(c.symbol or c.token[:8]))
     dev_note = "first launch" if dep_count <= 1 else f"⚠️ serial deployer x{dep_count}"
     if c.dev_sold:
@@ -276,17 +330,19 @@ def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0):
     return "\n".join([
         f"🎯 <b>CONFIRMED</b> — <b>{sym}</b>",
         glance(c.token, c.price, c.paired, c.pct, c.launched_at, now, ethusd),
+        social_line(soc),
         f"✅ rebuyers <b>{c.rebuyers}</b> (≥{args.rebuyers}) · net <b>{c.net_weth:+.2f}</b> ETH · snipers <b>{c.snipers}</b> (≤{args.snipers})",
         f"🛒 early buyers {len(c.buyers)} · 🧠 smart-money <b>{len(c.smart_hits)}</b>{risk}",
         f"🧑‍💻 dev: {dev_note}{held}",
-        f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>  (backtest winrate ~30%, +net-hold guard)',
+        f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>',
     ])
 
 
-def fmt_neargrad(tok, sym, pct, paired, vel, price=None, launched_at=None, ethusd=0, now=0):
+def fmt_neargrad(tok, sym, pct, paired, vel, price=None, launched_at=None, ethusd=0, now=0, soc=None):
     return "\n".join([
         f"🔥 <b>NEAR-GRAD</b> — <b>{html.escape(str(sym or tok[:8]))}</b>",
         glance(tok, price, paired, pct, launched_at, now, ethusd),
+        social_line(soc),
         f"progress <b>{pct:.0f}%</b> · {paired:.2f}/{api.GRAD_THRESHOLD_ETH} ETH · vel <b>{vel:+.2f}</b> ETH/min",
         f'<a href="{BLOCKSCOUT}{tok}">{tok[:12]}…</a>',
     ])
@@ -308,6 +364,10 @@ def main():
     # Backtest: fp 33 -> 8, winners 45 -> 43, precision 10% -> 32%.
     ap.add_argument("--hold", type=float, default=120.0)
     ap.add_argument("--hold-keep", type=float, default=1.0)
+    # social gate: winners have an X/website 80% of the time vs 10% for dead coins.
+    ap.add_argument("--require-social", dest="require_social", action="store_true", default=True,
+                    help="skip CONFIRMED if the coin has no X and no website (default on)")
+    ap.add_argument("--no-require-social", dest="require_social", action="store_false")
     ap.add_argument("--near", type=float, default=70.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -320,7 +380,7 @@ def main():
                  (json.load(open(os.path.join(DATA, "deployer_grads.json")))
                   if os.path.exists(os.path.join(DATA, "deployer_grads.json")) else {}).items()}
     print(f"pons PRO scanner  rule: rebuyers>={args.rebuyers} & net>={args.net}ETH & snipers<={args.snipers} "
-          f"& NOT(dev>{args.max_dev_launches} launches & 0 grads) & net-hold {args.hold:.0f}s(keep {args.hold_keep:.0%})  "
+          f"& NOT(dev-spam) & net-hold {args.hold:.0f}s & social={'required' if args.require_social else 'off'}  "
           f"smart-wallets={len(smart)}  -> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
 
     coins = {}          # token -> CoinState
@@ -402,15 +462,20 @@ def main():
             if c.pending_since is not None and (now - c.pending_since) >= args.hold:
                 held = c.net_weth >= c.fire_net * args.hold_keep
                 c.confirmed = True
-                if held:
-                    dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args,
-                                           c.fire_net, ethusd[0], now),
-                             f"CONFIRMED {c.symbol or c.token[:8]}",
-                             buttons=links(c.token, c.pool))
-                else:
+                if not held:
                     print(f"[{time.strftime('%H:%M:%S')}] DROP pump-dump "
                           f"{c.symbol or c.token[:8]} (net {c.fire_net:.2f} -> {c.net_weth:.2f})",
                           flush=True)
+                    continue
+                soc = dex_socials(c.token, now)
+                if args.require_social and not soc.get("has"):
+                    print(f"[{time.strftime('%H:%M:%S')}] DROP no-social "
+                          f"{c.symbol or c.token[:8]} (no X/web)", flush=True)
+                    continue
+                dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args,
+                                       c.fire_net, ethusd[0], now, soc),
+                         f"CONFIRMED {c.symbol or c.token[:8]}",
+                         buttons=links(c.token, c.pool, soc))
 
     def check_neargrad(now):
         try:
@@ -444,9 +509,10 @@ def main():
                 continue
             near_sent[tok] = now
             sym = coins[tok].symbol if tok in coins else (r.get("symbol") or tok[:8])
-            dispatch(fmt_neargrad(tok, sym, pct, paired, vel, price, launched_at, ethusd[0], now),
+            soc = dex_socials(tok, now)
+            dispatch(fmt_neargrad(tok, sym, pct, paired, vel, price, launched_at, ethusd[0], now, soc),
                      f"NEAR-GRAD {sym or tok[:8]}",
-                     buttons=links(tok, r.get("pool")))
+                     buttons=links(tok, r.get("pool"), soc))
 
     print("running… Ctrl-C to stop", flush=True)
     last_eth = [time.time()]
