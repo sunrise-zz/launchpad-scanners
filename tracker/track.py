@@ -10,6 +10,8 @@ Price sources are chosen per alert by its `track` dict:
     dexscreener  -> api.dexscreener.com/tokens/v1/{robinhood|base|solana}/{addr}
     arc          -> web-production-efe27.up.railway.app/token/{addr}
     virtuals     -> api2.virtuals.io/api/virtuals/{id}   (mcap in VIRTUAL)
+    gmgn         -> openapi.gmgn.ai token/info (needs GMGN_API_KEY; used by
+                    bags/scan.py whose pads DexScreener may not index)
 
 Idempotent and resumable: a (alert_id, horizon) already in snapshots.jsonl is
 never re-sampled, so restarts and the 24/7 LaunchAgent are safe.
@@ -77,6 +79,30 @@ def snap_pumpfun(mint):
             "complete": bool((d or {}).get("complete"))}
 
 
+def snap_gmgn(chain_slug, addr):
+    import sys
+    sys.path.insert(0, os.path.join(HERE, "..", "pons"))
+    import gmgn
+    gchain = {"robinhood": "robinhood", "base": "base", "solana": "sol"}.get(chain_slug)
+    d = gmgn.token_info(gchain, addr) or {}
+    price = None
+    try:
+        price = float((d.get("price") or {}).get("price"))
+    except (TypeError, ValueError):
+        pass
+    mcap = None
+    try:
+        mcap = price * float(d.get("circulating_supply")) if price else None
+    except (TypeError, ValueError):
+        pass
+    liq = None
+    try:
+        liq = float(d.get("liquidity"))
+    except (TypeError, ValueError):
+        pass
+    return {"price": price, "mcap": mcap, "liq": liq} if d else None
+
+
 def snap_flap(addr):
     # DexScreener doesn't reliably index small Robinhood-chain tokens, so price
     # flap coins from flap's own backend (mcap/liquidity are USD-ish numbers).
@@ -101,6 +127,8 @@ def take_snapshot(track):
             return snap_pumpfun(track["address"])
         if m == "flap":
             return snap_flap(track["address"])
+        if m == "gmgn":
+            return snap_gmgn(track.get("chainSlug") or "robinhood", track["address"])
     except Exception:  # noqa: BLE001
         return None
     return None

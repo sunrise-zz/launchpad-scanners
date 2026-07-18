@@ -1,0 +1,39 @@
+# bags/ — GMGN Trenches scanner (uncovered Robinhood-chain launchpads)
+
+Watches the launchpads on Robinhood Chain that the six source-level scanners
+**don't** cover — `bags`, `bankr`, `noxa`, `dyorswap` and virtuals-on-robinhood
+(`virtuals/scan.py` only sees the BASE/SOLANA app API) — via GMGN's Trenches
+board (`pons/gmgn.py trenches()`, one authed POST per poll, no RPC).
+
+Found 2026-07-18 while probing the GMGN Agent API: robinhood trending surfaced
+`bags` coins (RobinHub, $157K mcap, 414 holders) that never appear in any feed
+we scan. pons/flap/flap_stocks are deliberately excluded here — the dedicated
+scanners catch those minutes earlier at the source.
+
+## Tiers
+
+| Tier | Source section | Fires when |
+|---|---|---|
+| 🐣 TRENCH EARLY | `pump` (= near_completion) | age ≤ 24h · holders ≥ 25 · vol24h ≥ $1K · progress ≥ 25% · sell tax ≤ 5% · not honeypot |
+| 🚀 TRENCH GRAD | `completed` | coin newly bonds (post-seed) |
+
+Trenches items arrive pre-enriched (~118 fields), so alerts carry GMGN
+forensics for free: smart_degen/renowned counts, bot/rat/insider rates,
+X follower count, taxes. The v1 score (base 42/50 ± modifiers) and the bar
+are judgment calls — every launch/alert is logged to `data/events.jsonl` and
+every alert to the outcome tracker (track method `gmgn`), so both get refit
+from real returns like every other scanner in this repo.
+
+Startup seeds each section silently (no backlog spam). Needs `GMGN_API_KEY`
+in `~/.config/gmgn/.env` (read-only key; never `GMGN_PRIVATE_KEY`).
+
+## Usage
+
+```bash
+python3 bags/scan.py --once      # one diagnostic pass: every coin vs the bar
+python3 bags/scan.py --dry-run   # live loop, print alerts instead of sending
+python3 bags/scan.py             # live -> Telegram (pons/.env creds)
+```
+
+24/7: `~/Library/LaunchAgents/com.sunrise.bags-scanner.plist`
+(logs -> `bags/data/bags_scan.log`).

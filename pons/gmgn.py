@@ -85,6 +85,56 @@ def _get(path, params, timeout=8):
     return d
 
 
+def _post(path, params, body, timeout=10):
+    """POST with exist-auth (same envelope handling as _get)."""
+    key = api_key()
+    if not key:
+        return None
+    q = dict(params or {})
+    q["timestamp"] = int(time.time())
+    q["client_id"] = str(uuid.uuid4())
+    url = f"{HOST}{path}?" + urllib.parse.urlencode(q, doseq=True)
+    req = urllib.request.Request(url, data=json.dumps(body).encode(), method="POST",
+                                 headers={
+                                     "X-APIKEY": key,
+                                     "Content-Type": "application/json",
+                                     "User-Agent": "launchpad-scanners/0.1",
+                                 })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            d = json.loads(r.read())
+    except Exception:  # noqa: BLE001
+        return None
+    if isinstance(d, dict) and "code" in d:
+        return d.get("data") if d.get("code") == 0 else None
+    return d
+
+
+# GMGN's own robinhood quote-address allow-list (from gmgn-cli). Sent verbatim;
+# an EMPTY launchpad_platform/quote list filters out EVERYTHING, so both must
+# always be non-empty.
+_TRENCH_QUOTES = {"robinhood": [11, 20, 24, 12, 0], "sol": [4, 5, 3, 1, 13, 0],
+                  "base": [11, 3, 12, 13, 0], "eth": [20, 11, 8, 3, 12, 1, 0],
+                  "bsc": [6, 7, 1, 16, 8, 3, 9, 10, 2, 17, 18, 0]}
+
+
+def trenches(chain, platforms, types=("new_creation", "near_completion", "completed"),
+             limit=50, timeout=12):
+    """GMGN Trenches board — the launchpad-native new/completing/completed
+    columns. `platforms` is a REQUIRED allow-list of launchpad keys (e.g.
+    ["bags", "bankr"]); server defaults return nothing. Response section for
+    near_completion comes back named "pump". None on failure."""
+    section = {"filters": ["offchain", "onchain"], "launchpad_platform_v2": True,
+               "limit": limit, "launchpad_platform": list(platforms)}
+    qt = _TRENCH_QUOTES.get(chain)
+    if qt:
+        section["quote_address_type"] = qt
+    body = {"version": "v2"}
+    for t in types:
+        body[t] = dict(section)
+    return _post("/v1/trenches", {"chain": chain}, body, timeout)
+
+
 def token_info(chain, address, timeout=8):
     return _get("/v1/token/info", {"chain": chain, "address": address}, timeout)
 
