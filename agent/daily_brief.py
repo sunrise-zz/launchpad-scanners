@@ -144,6 +144,12 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
+    # refresh tier_stats.json first — the 📜 record line in every alert reads it
+    try:
+        subprocess.run([sys.executable, os.path.join(REPO, "tracker", "analyze.py"),
+                        "--write-stats"], capture_output=True, timeout=60)
+    except Exception:  # noqa: BLE001
+        pass
     data = gather()
     brief = hermes_brief(data)
     if brief:
