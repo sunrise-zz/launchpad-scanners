@@ -38,7 +38,13 @@ verdict quality matters more than hedging. Do not soften verdicts to be safe.
 3. **Narrative** (web search, 1-2 queries max): is the name/ticker riding a
    real current meta (search the ticker + "memecoin")? Is it a copy of a
    coin that already ran? On-chain copies with `img_dup` > 0 = late imitation.
-4. **Cross-check the scanner's own row**: the alert JSON has the factor
+4. **Relaunch-farm check** (terminal, instant):
+   `grep -ci '"SYMBOL"' tracker/data/alerts.jsonl` (the coin's symbol) — the
+   same name on DIFFERENT addresses minutes apart with near-identical traction
+   numbers is one bot operator redeploying with manufactured transfers
+   (seen live: "RUDY" ×3 in 23 min, ~130 recipients each). That pattern is a
+   hard **AVOID** regardless of how clean the per-coin metrics look.
+5. **Cross-check the scanner's own row**: the alert JSON has the factor
    breakdown (rebuyers, net ETH, snipers, score, gmgn block at alert time).
    Did key numbers improve or collapse since the alert (compare step 1)?
 

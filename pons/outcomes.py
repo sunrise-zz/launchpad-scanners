@@ -68,3 +68,30 @@ def record_alert(platform, chain, tier, symbol, token, score, track,
     except Exception:  # noqa: BLE001
         pass
     return row
+
+
+def recent_same_symbol(platform, symbol, token, hours=24.0):
+    """Prior alerts on `platform` carrying the SAME symbol but a DIFFERENT
+    token address within `hours`. Detects relaunch farms: 2026-07-18 one
+    operator deployed "RUDY" three times ~11 min apart, each copy crossing the
+    flap traction bar with near-identical manufactured transfers (~130
+    recipients each). Address-based dedup can't see that — the name can."""
+    if not symbol or not os.path.exists(ALERTS):
+        return []
+    sym = str(symbol).strip().lower()
+    tok = (token or "").lower()
+    cutoff = time.time() - hours * 3600
+    out = []
+    try:
+        for ln in open(ALERTS):
+            try:
+                r = json.loads(ln)
+            except Exception:  # noqa: BLE001
+                continue
+            if (r.get("t", 0) >= cutoff and r.get("platform") == platform
+                    and str(r.get("symbol") or "").strip().lower() == sym
+                    and (r.get("token") or "").lower() != tok):
+                out.append(r)
+    except Exception:  # noqa: BLE001
+        return []
+    return out

@@ -23,6 +23,14 @@ judgment they can't do, using [Hermes Agent](https://github.com/NousResearch/her
 - `tracker/report.py --by-verdict` section — measures whether AI verdicts
   separate outcomes better than the heuristic score. **Verdicts are advisory
   until this shows lift** (same collected-then-refit rule as every signal).
+- `daily_brief.py` — 08:00 Telegram brief (LaunchAgent
+  `com.sunrise.daily-brief`): hard numbers gathered in stdlib (24h alert
+  volume, 7d return medians per platform, AI scorecard), Hermes writes the
+  Thai summary; falls back to raw stats if the model is down.
+- `skill_review.py` — Sundays 09:00 (`com.sunrise.skill-review`): joins
+  verdicts with real returns; once ≥10 have matured, Hermes edits its own
+  `memecoin-dd` SKILL.md to fix systematic mistakes (output contract frozen;
+  change applied uncommitted + diff posted to Telegram for review).
 
 ## Setup
 

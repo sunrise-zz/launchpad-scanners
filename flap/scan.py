@@ -239,6 +239,11 @@ def main():
     ap.add_argument("--max-sell-tax", type=int, default=500,
                     help="drop candidates whose sell tax exceeds this (bps, default 5%%)")
     ap.add_argument("--max-buy-tax", type=int, default=500)
+    # relaunch-farm gate: same NAME alerted repeatedly on different addresses
+    # (RUDY x3 in 23 min, 2026-07-18). 2 = second copy still alerts (with a
+    # warning con), third+ is suppressed.
+    ap.add_argument("--max-name-repeats", type=int, default=2,
+                    help="skip EARLY when this many same-name alerts already fired in 24h")
     ap.add_argument("--near", type=float, default=70.0,
                     help="graduatinghot progress %% for NEAR-GRAD alerts")
     ap.add_argument("--dry-run", action="store_true")
@@ -358,6 +363,12 @@ def main():
                 continue
             sym = d.get("symbol") or token_symbol(t.addr) or t.addr[:8]
             name = d.get("name") or ""
+            prior_same = outcomes.recent_same_symbol("flap.sh", sym, t.addr)
+            if len(prior_same) >= args.max_name_repeats:
+                print(f"[{time.strftime('%H:%M:%S')}] SKIP relaunch-farm {sym} "
+                      f"({len(prior_same)} same-name alerts in 24h)", flush=True)
+                log_event("skip_name_farm", addr=t.addr, sym=sym, prior=len(prior_same))
+                continue
             top1, top10 = concentration(d) if d else (None, None)
 
             # heuristic score: base 45 (crossed the traction bar), extras shift.
@@ -397,6 +408,8 @@ def main():
                             + ("" if d else " (GMGN)"))
             if not tax_known:
                 cons.append("tax ？ (apis unavailable — check before buying)")
+            if prior_same:
+                cons.append(f"⚠️ name relaunched x{len(prior_same)} in 24h (farm?)")
             if top1 is not None and top1 >= 30:
                 cons.append(f"top wallet {top1:.0f}% of top-20 pot")
             elif g and (g.get("top10_rate") or 0) >= 0.5:
