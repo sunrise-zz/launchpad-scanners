@@ -93,10 +93,16 @@ def progress(c):
 
 
 def links(mint, c):
-    row = [("💊 pump.fun", f"{PUMP_URL}{mint}"),
-           ("📈 DexScreener", f"https://dexscreener.com/solana/{mint}")]
+    rows = [
+        [("💊 pump.fun", f"{PUMP_URL}{mint}"),
+         ("📈 DexScreener", f"https://dexscreener.com/solana/{mint}")],
+        [("🔎 GMGN", f"https://gmgn.ai/sol/token/{mint}"),
+         ("🔗 Solscan", f"https://solscan.io/token/{mint}")],
+    ]
     tw = c.get("twitter")
-    return [[("🐦 X account", tw)], row] if tw else [row]
+    if tw:
+        rows.insert(0, [("🐦 X account", tw)])
+    return rows
 
 
 class Coin:
