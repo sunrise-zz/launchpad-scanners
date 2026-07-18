@@ -70,6 +70,44 @@ def record_alert(platform, chain, tier, symbol, token, score, track,
     return row
 
 
+SNAPS = os.path.join(TRACK_DIR, "snapshots.jsonl")
+
+
+def peak_return(alert_row):
+    """Max return vs the alert-time baseline across every horizon the tracker
+    sampled for that alert. None when no usable data. Used to tell a relaunch
+    FARM (every prior copy died instantly) from a NARRATIVE wave (a prior copy
+    of this name already ran — the market proved demand). Cheap file scan;
+    only called for the rare same-name candidates."""
+    try:
+        base = float(alert_row.get("price0") or alert_row.get("mcap0") or 0) or None
+    except (TypeError, ValueError):
+        base = None
+    if base is None or not os.path.exists(SNAPS):
+        return None
+    metric = "price" if alert_row.get("price0") else "mcap"
+    aid = f"{alert_row['t']:.0f}:{alert_row.get('token')}"
+    best = None
+    try:
+        for ln in open(SNAPS):
+            try:
+                s = json.loads(ln)
+            except Exception:  # noqa: BLE001
+                continue
+            if s.get("id") != aid:
+                continue
+            try:
+                v = float(s.get(metric) or 0)
+            except (TypeError, ValueError):
+                continue
+            if v > 0:
+                r = v / base - 1
+                best = r if best is None else max(best, r)
+    except Exception:  # noqa: BLE001
+        return None
+    return best
+
+
 def recent_same_symbol(platform, symbol, token, hours=24.0):
     """Prior alerts on `platform` carrying the SAME symbol but a DIFFERENT
     token address within `hours`. Detects relaunch farms: 2026-07-18 one

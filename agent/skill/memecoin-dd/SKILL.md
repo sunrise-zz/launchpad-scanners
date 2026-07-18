@@ -38,12 +38,19 @@ verdict quality matters more than hedging. Do not soften verdicts to be safe.
 3. **Narrative** (web search, 1-2 queries max): is the name/ticker riding a
    real current meta (search the ticker + "memecoin")? Is it a copy of a
    coin that already ran? On-chain copies with `img_dup` > 0 = late imitation.
-4. **Relaunch-farm check** (terminal, instant):
-   `grep -ci '"SYMBOL"' tracker/data/alerts.jsonl` (the coin's symbol) — the
-   same name on DIFFERENT addresses minutes apart with near-identical traction
-   numbers is one bot operator redeploying with manufactured transfers
-   (seen live: "RUDY" ×3 in 23 min, ~130 recipients each). That pattern is a
-   hard **AVOID** regardless of how clean the per-coin metrics look.
+4. **Same-name relaunch check** (terminal, instant):
+   `grep -i '"SYMBOL"' tracker/data/alerts.jsonl` — repeated names have TWO
+   opposite meanings; you must tell them apart, never blanket-AVOID:
+   - **Farm** = one operator redeploying with manufactured traction:
+     near-identical numbers each round (~130 recipients every ~11 min, the
+     live "RUDY" case), smart/renowned/whale all 0, no socials, every prior
+     copy dead on the tracker → hard **AVOID**.
+   - **Narrative wave** = the name IS the meta right now, many teams racing
+     it; the 3rd-5th version is often the one that sticks. Signals: prior
+     copy actually pumped (check its returns in snapshots.jsonl), THIS copy
+     has smart/renowned/whale tags, a real X account, growing (not cloned)
+     traction → judge on its own merits, and say "wave #N of a hot name" in
+     a WHY. Missing the wave winner is as bad as buying the farm.
 5. **Cross-check the scanner's own row**: the alert JSON has the factor
    breakdown (rebuyers, net ETH, snipers, score, gmgn block at alert time).
    Did key numbers improve or collapse since the alert (compare step 1)?

@@ -196,6 +196,43 @@ def gmgn_line(g):
     return "🧬 GMGN " + " · ".join(bits)
 
 
+def wave_decision(sym, prior_same, g, max_repeats):
+    """Same-name relaunch: farm spam or narrative wave? Returns
+    (suppress: bool, pro: str|None, con: str|None).
+
+    A farm can fake traction numbers every round but can't fake QUALITY:
+    smart/renowned/whale wallet tags, a real X account, or a prior copy of the
+    name that actually ran (we track every alerted copy's price). Any of those
+    lets the coin through flagged as a wave — the 5th relaunch that whales
+    finally play must NOT be suppressed. Count-only suppression applies to
+    copies with zero quality signals (the RUDY profile: ~130 manufactured
+    recipients, smart 0, renowned 0, no socials, every copy dead)."""
+    if not prior_same:
+        return False, None, None
+    n = len(prior_same)
+    gq = g or {}
+    quality = []
+    if (gq.get("smart") or 0) >= 1:
+        quality.append(f"smart {gq['smart']}")
+    if (gq.get("renowned") or 0) >= 1:
+        quality.append(f"renowned {gq['renowned']}")
+    if (gq.get("whale_w") or 0) >= 1:
+        quality.append(f"whale {gq['whale_w']}")
+    if gq.get("has_x"):
+        quality.append("real X")
+    rets = [r for r in (outcomes.peak_return(p) for p in prior_same) if r is not None]
+    best_prior = max(rets) if rets else None
+    if best_prior is not None and best_prior >= 1.0:
+        return False, (f"🔁 wave #{n+1} — a prior {sym} copy peaked "
+                       f"{best_prior*100:+.0f}% (name has proven demand)"), None
+    if quality:
+        return False, (f"🔁 wave #{n+1} + {' · '.join(quality)} "
+                       f"(possible narrative winner)"), None
+    if n >= max_repeats:
+        return True, None, None
+    return False, None, f"⚠️ name relaunched x{n} in 24h, no quality signals (farm?)"
+
+
 def gmgn_tax(addr):
     """Tax gate fallback via GMGN token_security when batman doesn't know the
     coin. Returns (line, buy_bps, sell_bps, known)."""
@@ -364,9 +401,10 @@ def main():
             sym = d.get("symbol") or token_symbol(t.addr) or t.addr[:8]
             name = d.get("name") or ""
             prior_same = outcomes.recent_same_symbol("flap.sh", sym, t.addr)
-            if len(prior_same) >= args.max_name_repeats:
+            suppress, wave_pro, farm_con = wave_decision(sym, prior_same, g, args.max_name_repeats)
+            if suppress:
                 print(f"[{time.strftime('%H:%M:%S')}] SKIP relaunch-farm {sym} "
-                      f"({len(prior_same)} same-name alerts in 24h)", flush=True)
+                      f"({len(prior_same)} same-name alerts in 24h, zero quality signals)", flush=True)
                 log_event("skip_name_farm", addr=t.addr, sym=sym, prior=len(prior_same))
                 continue
             top1, top10 = concentration(d) if d else (None, None)
@@ -401,6 +439,8 @@ def main():
             gl = gmgn_line(g)
             if gl:
                 pros.append(gl)
+            if wave_pro:
+                pros.append(wave_pro)
 
             cons = []
             if sell_bps or buy_bps:
@@ -408,8 +448,8 @@ def main():
                             + ("" if d else " (GMGN)"))
             if not tax_known:
                 cons.append("tax ？ (apis unavailable — check before buying)")
-            if prior_same:
-                cons.append(f"⚠️ name relaunched x{len(prior_same)} in 24h (farm?)")
+            if farm_con:
+                cons.append(farm_con)
             if top1 is not None and top1 >= 30:
                 cons.append(f"top wallet {top1:.0f}% of top-20 pot")
             elif g and (g.get("top10_rate") or 0) >= 0.5:
