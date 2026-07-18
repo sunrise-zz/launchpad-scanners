@@ -41,6 +41,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "vlad"))
 import alertfmt  # noqa: E402
 import api  # noqa: E402
+import gmgn  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 from rpc import rpc, rpc_batch  # noqa: E402  (quiknode Robinhood mainnet)
@@ -465,7 +466,23 @@ def score_confirmed(c, dep_count, soc, paid, r):
     return alertfmt.clamp(s)
 
 
-def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None, paid=None):
+def gmgn_line(g):
+    """One pros line from the GMGN snapshot — the cross-platform view we can't
+    compute ourselves (smart/renowned wallet tags span every chain/launchpad).
+    Display only for now; fields earn score weight via outcome tracking."""
+    if not g:
+        return None
+    bits = [f"smart <b>{g.get('smart', 0)}</b>", f"renowned {g.get('renowned', 0)}"]
+    if g.get("bot_rate") is not None:
+        bits.append(f"bots {g['bot_rate']*100:.0f}%")
+    if g.get("dev_best_ath_mc"):
+        bits.append(f"dev best {human_usd(g['dev_best_ath_mc'])}")
+    if g.get("img_dup"):
+        bits.append(f"img dup x{g['img_dup']}")
+    return "🧬 GMGN " + " · ".join(bits)
+
+
+def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None, paid=None, g=None):
     sym = html.escape(str(c.symbol or c.token[:8]))
     r = holder_risk(c.token, c.pool, c.deployer, now)
     score = score_confirmed(c, dep_count, soc, paid, r)
@@ -483,6 +500,9 @@ def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None, 
     mom = momentum_line(soc, None)
     if mom:
         pros.append(mom[2:])   # already carries its own emoji cluster, strip "📊 "
+    gl = gmgn_line(g)
+    if gl:
+        pros.append(gl)
 
     cons = []
     if c.snipers:
@@ -730,17 +750,18 @@ def main():
                           f"{c.symbol or c.token[:8]} (score {c.smart_score})", flush=True)
                     continue
                 paid = dex_paid(c.token, now)
+                g = gmgn.snapshot("robinhood", c.token)   # one call: display + record
                 dc = max(dep_count(c.deployer), 1)   # total launches by this deployer
                 sc = score_confirmed(c, dc, soc, paid,
                                      holder_risk(c.token, c.pool, c.deployer, now))
                 dispatch(fmt_confirmed(c, dc, args,
-                                       c.fire_net, ethusd[0], now, soc, paid),
+                                       c.fire_net, ethusd[0], now, soc, paid, g),
                          f"CONFIRMED {c.symbol or c.token[:8]}",
                          buttons=links(c.token, c.pool, soc),
                          record=dict(platform="pons.family", chain="ROBINHOOD", tier="CONFIRMED",
                                      symbol=c.symbol or c.token[:8], token=c.token, score=sc,
                                      track={"method": "dexscreener", "chainSlug": "robinhood", "address": c.token},
-                                     price0=c.price, liq0=(soc or {}).get("liq_usd")))
+                                     price0=c.price, liq0=(soc or {}).get("liq_usd"), gmgn=g))
 
     def check_neargrad(now):
         try:

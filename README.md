@@ -103,6 +103,17 @@ Small derived artifacts (best_logic, smart_wallets, graduations, reputation) are
 committed. Large raw datasets (full launch lists, event/swap dumps) are gitignored
 — regenerate them with each folder's `collect*.py`.
 
+## GMGN enrichment (optional)
+
+With a GMGN Agent API key (`~/.config/gmgn/.env`, read-only — see
+`pons/gmgn.py`; **never** set `GMGN_PRIVATE_KEY`, that unlocks trading), every
+alert row in `tracker/data/alerts.jsonl` is auto-enriched with GMGN forensics:
+cross-platform smart-money/renowned wallet tags, bot/rat/bundler rates, dev
+reputation (tokens created, best prior ATH, twitter delete history) and
+copycat detection. Collected-not-gated — `report.py` decides which fields earn
+score weight. pons CONFIRMED alerts also display a 🧬 GMGN line. Covers
+robinhood/sol/base/eth/bsc (not arc). Research: `docs/hermes-agent-integration.md`.
+
 ## Notes
 
 - Both launchpads are on Robinhood Chain (chainId 4663). The public
