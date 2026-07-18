@@ -12,11 +12,14 @@ judgment they can't do, using [Hermes Agent](https://github.com/NousResearch/her
   tools, ending in a strict `VERDICT/CONF/WHY1-3` block. Symlinked into
   `~/.hermes/skills/memecoin-dd` (repo copy is the source of truth).
 - `analyst.py` — daemon that tails `tracker/data/alerts.jsonl`; for each new
-  alert in `--tiers` (default `CONFIRMED,TRENCH EARLY,TRENCH GRAD` — the
-  low-volume/high-value tiers) it runs
-  `hermes chat -q … -s memecoin-dd --toolsets web,terminal,skills`,
-  parses the verdict, posts a 🤖 AI-DD follow-up to the same Telegram chat
-  and appends to `tracker/data/agent_verdicts.jsonl`.
+  alert in `--tiers` (default `CONFIRMED,TRENCH EARLY,TRENCH GRAD,FLAP
+  EARLY:55` — a `TIER:55` entry means only score ≥ 55) it runs
+  `hermes chat -q … -s memecoin-dd --toolsets web,terminal,skills`, parses
+  the verdict and **edits it into the original alert message** (the alert
+  bubble grows a 🤖 AI-DD section a few minutes later — no separate
+  follow-up message drifting between other alerts; falls back to a threaded
+  reply, then a standalone message). Also appends to
+  `tracker/data/agent_verdicts.jsonl`.
 - `tracker/report.py --by-verdict` section — measures whether AI verdicts
   separate outcomes better than the heuristic score. **Verdicts are advisory
   until this shows lift** (same collected-then-refit rule as every signal).

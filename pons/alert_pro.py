@@ -657,6 +657,10 @@ def main():
             return
         ok, info = telegram.send(text, token_tg, chat_id, buttons=buttons)
         if record and ok:
+            # stash the sent message so the AI analyst can append its verdict
+            # into the SAME bubble (edit-in-place) instead of a stray follow-up
+            record["tg"] = {"msg_id": info if isinstance(info, int) else None,
+                            "text": text, "buttons": buttons}
             outcomes.record_alert(**record)   # only record alerts that actually sent (no phantom outcomes)
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 

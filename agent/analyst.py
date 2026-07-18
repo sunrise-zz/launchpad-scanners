@@ -113,6 +113,8 @@ def record(row):
 
 
 def fmt_msg(a, v):
+    """Standalone AI-DD message — only the fallback path when the original
+    alert's message_id wasn't captured (or the edit/reply both failed)."""
     sym = html.escape(str(a.get("symbol") or "?"))
     emoji = VERDICT_EMOJI.get(v["verdict"], "❔")
     lines = [
@@ -125,6 +127,16 @@ def fmt_msg(a, v):
     if tok.startswith("0x"):
         lines.append(f'<a href="{BLOCKSCOUT}{tok}">{tok[:12]}…</a>')
     return "\n".join(lines)
+
+
+def fmt_section(v):
+    """AI verdict block appended INTO the original alert message (edit-in-place)
+    — one bubble per coin, no orphaned follow-ups between other alerts."""
+    emoji = VERDICT_EMOJI.get(v["verdict"], "❔")
+    lines = ["————————",
+             f"🤖 <b>AI-DD</b> {emoji} <b>{v['verdict']}</b> · conf {v['conf']}"]
+    lines += [f"• {html.escape(w)}" for w in v["whys"]]
+    return "\n" + "\n".join(lines)
 
 
 def main():
@@ -173,13 +185,25 @@ def main():
         if v:
             row.update(v)
             record(row)
-            msg = fmt_msg(a, v)
             if dry:
-                print(msg, flush=True)
+                print(fmt_msg(a, v), flush=True)
             else:
-                sent, info = telegram.send(msg, token_tg, chat_id)
+                tg = a.get("tg") or {}
+                sent, info, mode = False, "", "edit"
+                if tg.get("msg_id") and tg.get("text"):
+                    # preferred: grow the original alert bubble (no new message,
+                    # no re-notify) — verdict lands attached to its coin
+                    sent, info = telegram.edit(tg["text"] + fmt_section(v), tg["msg_id"],
+                                               token_tg, chat_id, buttons=tg.get("buttons"))
+                if not sent and tg.get("msg_id"):
+                    mode = "reply"     # edit failed (deleted/too old) -> thread under it
+                    sent, info = telegram.send(fmt_msg(a, v), token_tg, chat_id,
+                                               reply_to=tg["msg_id"])
+                if not sent:
+                    mode = "solo"      # legacy alerts without msg_id
+                    sent, info = telegram.send(fmt_msg(a, v), token_tg, chat_id)
                 print(f"[{time.strftime('%H:%M:%S')}] {sym}: {v['verdict']} conf {v['conf']} "
-                      f"({secs:.0f}s) {'sent' if sent else 'send FAILED: ' + info}", flush=True)
+                      f"({secs:.0f}s) {mode} {'ok' if sent else 'FAILED: ' + str(info)}", flush=True)
         else:
             row["error"] = (text or "")[-400:]
             record(row)

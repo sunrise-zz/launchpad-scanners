@@ -257,6 +257,8 @@ def main():
             return
         ok, info = telegram.send(text, token_tg, chat_id, buttons=buttons)
         if record and ok:
+            record["tg"] = {"msg_id": info if isinstance(info, int) else None,
+                            "text": text, "buttons": buttons}   # for AI edit-in-place
             outcomes.record_alert(**record)   # only record alerts that actually sent
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 

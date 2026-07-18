@@ -59,11 +59,18 @@ def load_creds():
 
 
 def send(text, token=None, chat_id=None, timeout=10, parse_mode="HTML",
-         disable_preview=True, buttons=None):
-    """Send a message. Returns (ok: bool, info: str).
+         disable_preview=True, buttons=None, reply_to=None, edit_id=None):
+    """Send a message. Returns (ok: bool, info).
+
+    On success `info` is the Telegram message_id (int) — callers can store it
+    to later edit the message in place (see edit()) or reply-thread to it.
+    On failure `info` is an error string (all existing callers only use info
+    in their failure branch, so the type split is safe).
 
     buttons: optional inline keyboard as a list of rows, each row a list of
     (label, url) tuples -> rendered as clickable URL buttons under the message.
+    reply_to: optional message_id to thread this message under.
+    edit_id: internal — edit that message_id in place instead of sending.
     """
     if token is None or chat_id is None:
         token, chat_id = load_creds()
@@ -71,7 +78,7 @@ def send(text, token=None, chat_id=None, timeout=10, parse_mode="HTML",
         return False, "no credentials (set env TELEGRAM_BOT_TOKEN/TELEGRAM_CHAT_ID or data/telegram.json)"
     if len(text) > TG_MAX:
         text = text[:TG_MAX - 1] + "…"    # 400 "message is too long" would drop it entirely
-    url = f"https://api.telegram.org/bot{token}/sendMessage"
+    url = f"https://api.telegram.org/bot{token}/{'editMessageText' if edit_id else 'sendMessage'}"
 
     def _post(pm):
         payload = {
@@ -79,6 +86,11 @@ def send(text, token=None, chat_id=None, timeout=10, parse_mode="HTML",
             "text": text,
             "disable_web_page_preview": "true" if disable_preview else "false",
         }
+        if edit_id:
+            payload["message_id"] = edit_id
+        elif reply_to:
+            payload["reply_to_message_id"] = reply_to
+            payload["allow_sending_without_reply"] = "true"   # original gone -> plain send
         if pm:
             payload["parse_mode"] = pm
         if buttons:
@@ -88,7 +100,10 @@ def send(text, token=None, chat_id=None, timeout=10, parse_mode="HTML",
         data = urllib.parse.urlencode(payload).encode()
         with urllib.request.urlopen(urllib.request.Request(url, data=data), timeout=timeout) as r:
             body = json.loads(r.read())
-            return bool(body.get("ok")), body.get("description", "sent")
+            ok = bool(body.get("ok"))
+            res = body.get("result")
+            mid = res.get("message_id") if isinstance(res, dict) else None
+            return ok, (mid if ok and mid else body.get("description", "sent"))
 
     # Up to 3 attempts: honour 429 retry_after, retry 5xx/network, and on an HTML
     # parse error fall back to plain text so the alert still arrives in some form.
@@ -119,6 +134,13 @@ def send(text, token=None, chat_id=None, timeout=10, parse_mode="HTML",
                 continue
             return False, str(e)
     return False, "exhausted retries"
+
+
+def edit(text, message_id, token=None, chat_id=None, buttons=None, **kw):
+    """Edit a previously sent message in place (append the AI verdict without a
+    new chat bubble). Same return contract as send(). Telegram does NOT
+    re-notify on edits, so this never double-pings."""
+    return send(text, token, chat_id, buttons=buttons, edit_id=message_id, **kw)
 
 
 if __name__ == "__main__":

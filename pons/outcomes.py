@@ -27,12 +27,15 @@ ALERTS = os.path.join(TRACK_DIR, "alerts.jsonl")
 
 
 def record_alert(platform, chain, tier, symbol, token, score, track,
-                 price0=None, mcap0=None, liq0=None, gmgn=None):
+                 price0=None, mcap0=None, liq0=None, gmgn=None, tg=None):
     """Append one alert row. Best-effort — never raises into the scanner loop.
 
     `gmgn`: pass a prefetched pons/gmgn.py snapshot to avoid a duplicate API
     call (alert_pro does); leave None to auto-fetch here (runs post-send, so
-    the ≤8s timeout never delays the Telegram alert itself)."""
+    the ≤8s timeout never delays the Telegram alert itself).
+    `tg`: {"msg_id", "text", "buttons"} of the sent Telegram message — lets
+    agent/analyst.py append its AI verdict INTO that message (edit-in-place)
+    instead of posting a separate follow-up that gets visually orphaned."""
     row = {
         "t": time.time(),
         "platform": platform,
@@ -56,6 +59,8 @@ def record_alert(platform, chain, tier, symbol, token, score, track,
             gmgn = None
     if gmgn:
         row["gmgn"] = gmgn
+    if tg and tg.get("msg_id"):
+        row["tg"] = tg
     try:
         os.makedirs(TRACK_DIR, exist_ok=True)
         with open(ALERTS, "a") as f:
