@@ -13,3 +13,10 @@ vlad/data/events.json
 vlad/data/coins_rest.json
 pons/data/launches.json
 pons/data/early_swaps.json
+
+# runtime artifacts — local scanner state & outcome tracking (regenerated live)
+.DS_Store
+**/data/events.jsonl
+tracker/data/
+pump/data/alerted_mints.txt
+pump/data/.seeded

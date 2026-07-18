@@ -43,7 +43,8 @@ def rpc(method, params, timeout=30, retries=5):
             return d["result"]
         except Exception as e:  # noqa: BLE001
             last = e
-            time.sleep(0.8 * (attempt + 1))
+            if attempt < retries - 1:       # don't sleep after the final attempt
+                time.sleep(0.8 * (attempt + 1))
     raise RuntimeError(f"rpc {method} failed after {retries}: {last}")
 
 
@@ -58,13 +59,24 @@ def rpc_batch(calls, timeout=30, retries=5):
             req = urllib.request.Request(RPC, data=body, headers={"content-type": "application/json"})
             with urllib.request.urlopen(req, timeout=timeout) as r:
                 d = json.loads(r.read())
+            # a whole-batch error comes back as a single object, not a list
+            if isinstance(d, dict):
+                raise RuntimeError(f"batch error: {d.get('error', d)}")
             out = [None] * len(calls)
             for item in d:
+                if item.get("id") is None:
+                    raise RuntimeError(f"batch error: {item.get('error', item)}")
+                if "error" in item:
+                    # a per-sub-request JSON-RPC error (rate-limit, range-too-large):
+                    # surface it (engages retry) instead of silently returning None,
+                    # which is indistinguishable from a legitimate null result.
+                    raise RuntimeError(f"batch[{item['id']}] {item['error']}")
                 out[item["id"]] = item.get("result")
             return out
         except Exception as e:  # noqa: BLE001
             last = e
-            time.sleep(0.8 * (attempt + 1))
+            if attempt < retries - 1:       # don't sleep after the final attempt
+                time.sleep(0.8 * (attempt + 1))
     raise RuntimeError(f"rpc batch failed after {retries}: {last}")
 
 

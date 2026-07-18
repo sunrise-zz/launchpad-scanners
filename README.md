@@ -1,10 +1,12 @@
 # launchpad-scanners
 
-Source-level (ต้นน้ำ) coin scanners for two **Robinhood Chain** memecoin
-launchpads — **vlad.fun** and **pons.family**. Each reverse-engineers the
-platform's data (on-chain events and/or public API), backtests what actually
-predicts a coin pumping / graduating, and ships a live scanner that surfaces the
-promising launches early. Optional Telegram alerts.
+Source-level (ต้นน้ำ) coin scanners for six memecoin/AI-agent launchpads —
+**vlad.fun**, **pons.family**, **flap.sh** (Robinhood Chain),
+**Virtuals Protocol** (Base/Solana), **Arc DEX Scan** (Arc Mainnet) and
+**pump.fun** (Solana). Each reverse-engineers the platform's data (on-chain
+events and/or public API), backtests what actually predicts a coin pumping /
+graduating, and ships a live scanner that surfaces the promising launches early.
+Optional Telegram alerts.
 
 > **Detection only.** These tools rank and alert. They never place a trade —
 > that's yours to do manually. Winrates below are historical and not a promise;
@@ -33,6 +35,41 @@ momentum** (distinct non-dev buyers + buy volume in the first 30–120s).
 
 - `scan.py` — live on-chain scanner
 - `run_backtest.py`, `lead_time.py` — logic search + lead-time proof
+
+### `virtuals/` — Virtuals Protocol (AI agents, Base + Solana)
+Fully open Strapi API with premium fields (mindshare, holder growth %, dev/top10
+concentration, curve reserve → graduation progress). 🐣 EARLY traction +
+🔥 NEAR-GRAD (42k VIRTUAL tier), chain-tagged alerts. See `virtuals/README.md`.
+
+- `scan.py` — live API scanner (no RPC needed)
+
+### `pump/` — pump.fun (Solana, the biggest launchpad)
+~23k launches/day, so it watches the actively-traded feed and alerts on the
+*climb*: 🐣 EARLY (young coin crossing the mcap bar, climbing near its ATH) +
+🚀 GRADUATING (nearing the ~$69k curve completion). API-only. See `pump/README.md`.
+
+- `scan.py` — live API scanner (no RPC needed)
+
+### `tracker/` — alert outcome tracking (feedback loop)
+Records every alert, follows each coin's price at 5m…48h, and reports whether
+the scores actually predicted pumps — the data for refitting score weights.
+`report.py` slices returns by platform / tier / score band. See `tracker/README.md`.
+
+### `arc/` — Arc DEX Scan (Arc Mainnet, chainId 5042)
+Small, young chain. Open Railway backend with a `/launches` feed + `/token`
+enrichment. 🐣 EARLY traction + 🚀 LAUNCHED (migration) tiers, API-only. See
+`arc/README.md`.
+
+- `scan.py` — live API scanner (no RPC needed)
+
+### `flap/` — flap.sh (bonding curve, trade-tax tokens)
+The busiest launchpad on the chain (~5k launches/day). New tokens are caught
+**on-chain** (mint events + the `...7777` vanity suffix from the factory);
+the reverse-engineered `batman.taxed.fun` API enriches candidates with
+progress %, holders, **buy/sell tax bps** (honeypot gate) and the platform's
+own `isLowRisk` (FAC) flag. See `flap/README.md`.
+
+- `scan.py` — live scanner (🐣 EARLY traction + 🔥 NEAR-GRAD → Telegram)
 
 ## Quick start
 

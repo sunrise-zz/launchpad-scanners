@@ -39,7 +39,9 @@ from collections import defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "vlad"))
+import alertfmt  # noqa: E402
 import api  # noqa: E402
+import outcomes  # noqa: E402
 import telegram  # noqa: E402
 from rpc import rpc, rpc_batch  # noqa: E402  (quiknode Robinhood mainnet)
 
@@ -70,7 +72,8 @@ def holders(token, now, ttl=60):
             d = json.loads(r.read())
         n = int(d.get("holders_count") or d.get("holders") or 0) or None
     except Exception:  # noqa: BLE001
-        n = hit[1] if hit else None
+        # keep the old entry (don't renew its timestamp) so the next call retries
+        return hit[1] if hit else None
     _HOLDERS[token] = (now, n)
     return n
 
@@ -81,23 +84,34 @@ DEXSCR_TOKEN = "https://api.dexscreener.com/tokens/v1/robinhood/"
 
 
 def dex_socials(token, now, ttl=90):
-    """Socials/website from DexScreener (supports Robinhood chain). The single
-    strongest winner signal in the alert history: 78% of winners have an X
-    account vs 10% of coins that died. Returns {x, tg, web, has} (urls + bool)."""
+    """Socials + market microstructure from DexScreener (Robinhood chain).
+    Socials are the single strongest winner signal in the alert history: 78% of
+    winners have an X account vs 10% of coins that died. The same response also
+    carries per-window txns/volume — free momentum data we previously discarded.
+
+    Returns {x, tg, web, has, depth, liq_usd, m5_buys, m5_sells, h1_buys,
+             h1_sells, vol_m5, vol_h1}. Market keys are None when the pair
+    isn't indexed yet (very young coins)."""
     hit = _SOCIAL.get(token)
     if hit and (now - hit[0]) < ttl:
         return hit[1]
-    out = {"x": None, "tg": None, "web": None, "has": False}
+    out = {"x": None, "tg": None, "web": None, "has": False, "depth": 0,
+           "liq_usd": None, "m5_buys": None, "m5_sells": None,
+           "h1_buys": None, "h1_sells": None, "vol_m5": None, "vol_h1": None}
     try:
         import urllib.request
         req = urllib.request.Request(DEXSCR_TOKEN + token,
                                      headers={"user-agent": "Mozilla/5.0", "accept": "application/json"})
         with urllib.request.urlopen(req, timeout=8) as r:
             pairs = json.loads(r.read())
-        info = {}
+        info, best = {}, None
         for p in (pairs or []):
+            if best is None:
+                best = p
             if (p.get("info") or {}).get("socials") or (p.get("info") or {}).get("websites"):
                 info = p["info"]
+                if best is not p:
+                    best = p
                 break
         for s in (info.get("socials") or []):
             t = (s.get("type") or "").lower()
@@ -109,9 +123,51 @@ def dex_socials(token, now, ttl=90):
         if ws:
             out["web"] = ws[0].get("url") if isinstance(ws[0], dict) else ws[0]
         out["has"] = bool(out["x"] or out["web"])
+        out["depth"] = sum(1 for k in ("x", "tg", "web") if out[k])
+        if best:
+            tx = best.get("txns") or {}
+            vol = best.get("volume") or {}
+            out["liq_usd"] = (best.get("liquidity") or {}).get("usd")
+            out["m5_buys"] = (tx.get("m5") or {}).get("buys")
+            out["m5_sells"] = (tx.get("m5") or {}).get("sells")
+            out["h1_buys"] = (tx.get("h1") or {}).get("buys")
+            out["h1_sells"] = (tx.get("h1") or {}).get("sells")
+            out["vol_m5"] = vol.get("m5")
+            out["vol_h1"] = vol.get("h1")
     except Exception:  # noqa: BLE001
-        out = hit[1] if hit else out
+        return hit[1] if hit else out   # don't cache the failure; retry next call
     _SOCIAL[token] = (now, out)
+    return out
+
+
+_PAID = {}  # token -> (ts, list[str])
+DEXSCR_ORDERS = "https://api.dexscreener.com/orders/v1/robinhood/"
+
+
+def dex_paid(token, now, ttl=300):
+    """Paid-marketing check: has the team paid DexScreener for a profile/boost?
+    Teams spending real money on marketing is intent to push the coin, and the
+    payment timestamp often precedes the pump. Returns e.g. ["profile", "boost x80"].
+    """
+    hit = _PAID.get(token)
+    if hit and (now - hit[0]) < ttl:
+        return hit[1]
+    out = []
+    try:
+        import urllib.request
+        req = urllib.request.Request(DEXSCR_ORDERS + token,
+                                     headers={"user-agent": "Mozilla/5.0", "accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            d = json.loads(r.read())
+        if any(o.get("type") == "tokenProfile" and o.get("status") == "approved"
+               for o in (d.get("orders") or [])):
+            out.append("profile")
+        boosts = d.get("boosts") or []
+        if boosts:
+            out.append(f"boost x{sum(b.get('amount', 0) for b in boosts)}")
+    except Exception:  # noqa: BLE001
+        return hit[1] if hit else []   # don't cache the failure; retry next call
+    _PAID[token] = (now, out)
     return out
 
 
@@ -144,7 +200,7 @@ def holder_risk(token, pool, deployer, now, ttl=60):
                     "top10_pct": 100 * sum(b for _, b in non_pool[:10]) / circ,
                 }
     except Exception:  # noqa: BLE001
-        out = hit[1] if hit else {}
+        return hit[1] if hit else {}   # don't cache the failure; retry next call
     _RISK[token] = (now, out)
     return out
 
@@ -157,6 +213,50 @@ def total_supply(token):
         except Exception:  # noqa: BLE001
             _SUPPLY[token] = None
     return _SUPPLY[token]
+
+
+_SYM = {}   # token -> resolved ERC20 symbol (or None)
+
+
+def _decode_symbol(hexstr):
+    """Decode an ERC20 symbol() return: ABI dynamic string OR legacy bytes32."""
+    raw = bytes.fromhex(hexstr[2:]) if hexstr.startswith("0x") else bytes.fromhex(hexstr)
+    if len(raw) >= 64:
+        # dynamic string: [offset(32)][length(32)][data...]
+        try:
+            length = int.from_bytes(raw[32:64], "big")
+            if 0 < length <= 64:
+                txt = raw[64:64 + length].decode("utf-8", "ignore").strip("\x00").strip()
+                if txt:
+                    return txt
+        except Exception:  # noqa: BLE001
+            pass
+    # legacy bytes32: right-padded ascii
+    txt = raw[:32].decode("utf-8", "ignore").strip("\x00").strip()
+    return txt or None
+
+
+def token_symbol(token):
+    """On-chain ERC20 symbol() — the reliable fallback when neither the pons API
+    nor DexScreener names the coin (was showing the raw 0x… address). Cached."""
+    if token not in _SYM:
+        sym = None
+        try:
+            r = rpc("eth_call", [{"to": token, "data": "0x95d89b41"}, "latest"], timeout=8)
+            if r and r != "0x":
+                sym = _decode_symbol(r)
+        except Exception:  # noqa: BLE001
+            sym = None
+        _SYM[token] = sym
+    return _SYM[token]
+
+
+def _f(x):
+    """Safe float coercion (several feeds return numbers as strings). None on fail."""
+    try:
+        return float(x)
+    except (TypeError, ValueError):
+        return None
 
 
 def human_usd(x):
@@ -179,6 +279,7 @@ def age_str(launched_at, now):
 def glance(token, price, paired, pct, launched_at, now, ethusd):
     """One-line at-a-glance: market cap · holders · liquidity · age · progress."""
     sup = total_supply(token)
+    price = _f(price)   # recent_buys priceUsd can arrive as a string → mc math would crash
     mc = human_usd(price * sup) if (price and sup) else "?"
     h = holders(token, now)
     hstr = f" · 👥 {h} holders" if h else ""
@@ -219,20 +320,27 @@ def load_smart():
     return json.load(open(p)).get("strong", {})
 
 
-def load_deployer_counts():
+def load_deployer_tokens():
+    """deployer -> set of its token addresses. A SET (not a counter) so that
+    re-seeing a launch in /latest that's already in launches.json doesn't
+    double-count it — the old counter double-counted and tripped the spam gate /
+    serial-deployer penalty on legitimate first-time deployers."""
     p = os.path.join(DATA, "launches.json")
-    counts = defaultdict(int)
+    toks = defaultdict(set)
     if os.path.exists(p):
         for L in json.load(open(p)):
-            counts[(L.get("deployer") or "").lower()] += 1
-    return counts
+            dep = (L.get("deployer") or "").lower()
+            tk = (L.get("token") or "").lower()
+            if tk:
+                toks[dep].add(tk)
+    return toks
 
 
 class CoinState:
     __slots__ = ("token", "pool", "launch_block", "deployer", "symbol", "launched_at",
                  "token_is_0", "cursor", "buyers", "rebuy", "buy_weth", "sell_weth",
-                 "n_buys", "n_sells", "snipers", "smart_hits", "dev_sold", "confirmed",
-                 "dead", "pct", "paired", "price", "pending_since", "fire_net")
+                 "n_buys", "n_sells", "snipers", "smart_hits", "smart_score", "dev_sold",
+                 "confirmed", "dead", "pct", "paired", "price", "pending_since", "fire_net")
 
     def __init__(self, token, pool, launch_block, deployer, symbol, launched_at):
         self.token = token
@@ -251,6 +359,7 @@ class CoinState:
         self.n_sells = 0
         self.snipers = 0
         self.smart_hits = set()
+        self.smart_score = 0    # Σ graduated-coin count of each smart wallet that bought
         self.dev_sold = False
         self.confirmed = False
         self.dead = False
@@ -276,9 +385,13 @@ class CoinState:
                 self.rebuy[recip] += 1
                 if t <= 2.0:
                     self.snipers += 1
-                if recip in smart:
+                # weighted smart money: smart_wallets.json maps wallet -> how many
+                # graduated coins it bought early; a wallet with 4 grads under its
+                # belt is worth 4x a one-hit wallet, not the same binary tick.
+                if recip in smart and recip not in self.smart_hits:
                     self.smart_hits.add(recip)
-            else:
+                    self.smart_score += smart.get(recip, 1)
+            elif weth_amt < 0:      # exact-zero WETH delta is neither buy nor sell
                 self.n_sells += 1
                 self.sell_weth += abs(weth_amt)
                 if recip == self.deployer:
@@ -309,43 +422,136 @@ def social_line(soc):
         parts.append("🌐 web")
     if soc.get("tg"):
         parts.append("💬 TG")
-    return "🔗 " + " · ".join(parts) + "  ✅"
+    return f"🔗 {' · '.join(parts)}  ✅ {soc.get('depth', len(parts))}/3"
 
 
-def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None):
-    sym = html.escape(str(c.symbol or c.token[:8]))
-    dev_note = "first launch" if dep_count <= 1 else f"⚠️ serial deployer x{dep_count}"
-    if c.dev_sold:
-        dev_note += " · ⚠️ dev SOLD"
-    held = ""
-    if fire_net is not None:
-        held = f"\n🛡️ net held {fire_net:+.2f} → <b>{c.net_weth:+.2f}</b> after {args.hold:.0f}s (no dump)"
-    # holder concentration (GMGN-style rug check), excluding the curve pool
-    r = holder_risk(c.token, c.pool, c.deployer, now)
-    risk = ""
+def momentum_line(soc, paid):
+    """DexScreener microstructure + paid-marketing badge. Parts appear only when
+    the pair is indexed / the data exists, so young coins degrade gracefully."""
+    parts = []
+    if soc and soc.get("m5_buys") is not None:
+        b, s = soc["m5_buys"], soc["m5_sells"] or 0
+        ratio = f" ({b/s:.1f}x)" if s else ""
+        parts.append(f"m5 {b}🟢/{s}🔴{ratio}")
+    if soc and soc.get("vol_m5") is not None and soc.get("vol_h1"):
+        # ×12 annualises m5 to an hourly pace: >1x = interest accelerating NOW
+        accel = soc["vol_m5"] * 12 / soc["vol_h1"]
+        parts.append(f"vol accel {accel:.1f}x")
+    if soc and soc.get("liq_usd") is not None:
+        parts.append(f"liq {human_usd(soc['liq_usd'])}")
+    if paid:
+        parts.append("💰 paid: " + "+".join(paid))
+    return ("📊 " + " · ".join(parts)) if parts else ""
+
+
+def score_confirmed(c, dep_count, soc, paid, r):
+    """Heuristic 0-100. Base 50 = the rule itself passed (backtested ~30-40%
+    precision); extras shift it. Weights are v1 judgment calls — refit later."""
+    s = 50.0
+    s += min(c.rebuyers - 6, 6) * 2                      # conviction beyond the bar
+    s += min(max(c.net_weth - 1.0, 0), 3) * 4            # net ETH beyond the bar
+    s += min(c.smart_score, 10)                          # weighted smart money
+    s += (soc.get("depth", 0) if soc else 0) * 3         # winners: 78% have socials
+    s += 8 if paid else 0                                # team spends on marketing
+    if c.n_sells:
+        ratio = c.n_buys / c.n_sells
+        s += 6 if ratio >= 3 else (4 if ratio >= 2 else 0)
+    s -= c.snipers * 2
+    s -= 8 if dep_count > 1 else 0
+    s -= 10 if c.dev_sold else 0
     if r:
-        dv = f"dev {r['dev_pct']:.0f}%" + ("⚠️" if r["dev_pct"] >= 15 else "")
-        tw = f"top wallet {r['top1_pct']:.0f}%" + ("⚠️" if r["top1_pct"] >= 25 else "")
-        risk = f"\n🔒 {dv} · 🐋 {tw} · top10 {r['top10_pct']:.0f}%"
-    return "\n".join([
-        f"🎯 <b>CONFIRMED</b> — <b>{sym}</b>",
-        glance(c.token, c.price, c.paired, c.pct, c.launched_at, now, ethusd),
-        social_line(soc),
-        f"✅ rebuyers <b>{c.rebuyers}</b> (≥{args.rebuyers}) · net <b>{c.net_weth:+.2f}</b> ETH · snipers <b>{c.snipers}</b> (≤{args.snipers})",
-        f"🛒 early buyers {len(c.buyers)} · 🧠 smart-money <b>{len(c.smart_hits)}</b>{risk}",
-        f"🧑‍💻 dev: {dev_note}{held}",
-        f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>',
-    ])
+        s -= 6 if r.get("dev_pct", 0) >= 15 else 0
+        s -= 6 if r.get("top1_pct", 0) >= 25 else 0
+    return alertfmt.clamp(s)
 
 
-def fmt_neargrad(tok, sym, pct, paired, vel, price=None, launched_at=None, ethusd=0, now=0, soc=None):
-    return "\n".join([
-        f"🔥 <b>NEAR-GRAD</b> — <b>{html.escape(str(sym or tok[:8]))}</b>",
-        glance(tok, price, paired, pct, launched_at, now, ethusd),
-        social_line(soc),
-        f"progress <b>{pct:.0f}%</b> · {paired:.2f}/{api.GRAD_THRESHOLD_ETH} ETH · vel <b>{vel:+.2f}</b> ETH/min",
-        f'<a href="{BLOCKSCOUT}{tok}">{tok[:12]}…</a>',
-    ])
+def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None, paid=None):
+    sym = html.escape(str(c.symbol or c.token[:8]))
+    r = holder_risk(c.token, c.pool, c.deployer, now)
+    score = score_confirmed(c, dep_count, soc, paid, r)
+
+    bs = f"{c.n_buys}/{c.n_sells}" + (f" ({c.n_buys/c.n_sells:.1f}x)" if c.n_sells else "")
+    pros = [f"rebuyers <b>{c.rebuyers}</b> · net <b>{c.net_weth:+.2f}</b>Ξ · buys/sells {bs}"]
+    if c.smart_hits:
+        pros.append(f"🧠 smart {len(c.smart_hits)} กระเป๋า (score {c.smart_score})")
+    socbits = [b for b, on in (("🐦 X", soc and soc.get("x")), ("🌐 web", soc and soc.get("web")),
+                               ("💬 TG", soc and soc.get("tg"))) if on]
+    if paid:
+        socbits.append("💰 paid: " + "+".join(paid))
+    if socbits:
+        pros.append(" · ".join(socbits))
+    mom = momentum_line(soc, None)
+    if mom:
+        pros.append(mom[2:])   # already carries its own emoji cluster, strip "📊 "
+
+    cons = []
+    if c.snipers:
+        cons.append(f"snipers {c.snipers}/{args.snipers}")
+    if dep_count > 1:
+        cons.append(f"serial deployer x{dep_count}")
+    if c.dev_sold:
+        cons.append("dev SOLD")
+    if r and r.get("dev_pct", 0) >= 15:
+        cons.append(f"dev holds {r['dev_pct']:.0f}%")
+    if r and r.get("top1_pct", 0) >= 25:
+        cons.append(f"top wallet {r['top1_pct']:.0f}%")
+    if soc and not soc.get("has"):
+        cons.append("no socials")
+
+    stats = [glance(c.token, c.price, c.paired, c.pct, c.launched_at, now, ethusd)]
+    if fire_net is not None:
+        stats.append(f"🛡️ net held {fire_net:+.2f} → <b>{c.net_weth:+.2f}</b>Ξ over {args.hold:.0f}s")
+
+    return alertfmt.compose(score, "🎯", "CONFIRMED", sym, "🐸 pons.family", "ROBINHOOD",
+                            pros, cons, stats,
+                            f'<a href="{BLOCKSCOUT}{c.token}">{c.token[:12]}…</a>')
+
+
+def score_neargrad(pct, vel, soc, paid, holders_n):
+    """Heuristic 0-100 for the progress tier — base 40 (weaker signal than
+    CONFIRMED: late, momentum-driven, no early-trading factors).
+
+    Outcome data (2026-07-18, ~440 alerts): higher graduation % predicted WORSE
+    returns (score 65-100 band peaked at only +12% vs +17% for 40-58) — because
+    a coin already at 95% has done its move. So progress is NO LONGER rewarded;
+    the entry edge is momentum (velocity) while still mid-climb, so velocity is
+    weighted up and being very deep in the curve is penalised slightly."""
+    s = 40.0
+    s -= min(max(pct - 85, 0), 15)                       # >85%: late, likely already ran
+    s += min(max(vel, 0) * 15, 18)                       # ETH/min into the curve (main edge)
+    s += (soc.get("depth", 0) if soc else 0) * 3
+    s += 8 if paid else 0
+    if soc and soc.get("m5_buys") is not None:
+        b, sl = soc["m5_buys"], soc["m5_sells"] or 0
+        if b >= 2 * max(sl, 1):
+            s += 6
+    s += 5 if (holders_n or 0) >= 300 else 0
+    return alertfmt.clamp(s)
+
+
+def fmt_neargrad(tok, sym, pct, paired, vel, price=None, launched_at=None, ethusd=0, now=0, soc=None, paid=None):
+    holders_n = holders(tok, now)
+    score = score_neargrad(pct, vel, soc, paid, holders_n)
+
+    pros = [f"progress <b>{pct:.0f}%</b> ({paired:.2f}/{api.GRAD_THRESHOLD_ETH}Ξ) · vel <b>{vel:+.2f}</b>Ξ/min"]
+    socbits = [b for b, on in (("🐦 X", soc and soc.get("x")), ("🌐 web", soc and soc.get("web")),
+                               ("💬 TG", soc and soc.get("tg"))) if on]
+    if paid:
+        socbits.append("💰 paid: " + "+".join(paid))
+    if socbits:
+        pros.append(" · ".join(socbits))
+    mom = momentum_line(soc, None)
+    if mom:
+        pros.append(mom[2:])
+
+    cons = []
+    if soc and not soc.get("has"):
+        cons.append("no socials")
+
+    stats = [glance(tok, price, paired, pct, launched_at, now, ethusd)]
+    return alertfmt.compose(score, "🔥", "NEAR-GRAD", html.escape(str(sym or tok[:8])),
+                            "🐸 pons.family", "ROBINHOOD", pros, cons, stats,
+                            f'<a href="{BLOCKSCOUT}{tok}">{tok[:12]}…</a>')
 
 
 def main():
@@ -368,20 +574,50 @@ def main():
     ap.add_argument("--require-social", dest="require_social", action="store_true", default=True,
                     help="skip CONFIRMED if the coin has no X and no website (default on)")
     ap.add_argument("--no-require-social", dest="require_social", action="store_false")
+    # --- soft gates (default OFF: displayed in alerts, not yet backtested as filters;
+    #     turn on once enough alert history accumulates to fit thresholds) ---
+    ap.add_argument("--min-socials", type=int, default=1,
+                    help="with --require-social: minimum social channels of X/TG/web (default 1)")
+    ap.add_argument("--min-bs-ratio", type=float, default=0.0,
+                    help="skip CONFIRMED if on-chain buys/sells ratio is below this (0 = off)")
+    ap.add_argument("--min-liq-usd", type=float, default=0.0,
+                    help="skip CONFIRMED if DexScreener liquidity USD is below this (0 = off)")
+    ap.add_argument("--min-smart-score", type=int, default=0,
+                    help="skip CONFIRMED if weighted smart-money score is below this (0 = off)")
+    # marketing feed: poll DexScreener paid profiles/boosts (60 req/min budget).
+    # Default OFF as of 2026-07-18: outcome tracking showed paid-marketing alerts
+    # ran -14% (1h) → -39% (8h) with an 18% hit-rate — paying for a DexScreener
+    # profile does not predict price. Re-enable with --marketing-feed to collect more.
+    ap.add_argument("--marketing-feed", dest="marketing_feed", action="store_true", default=False,
+                    help="alert when any Robinhood-chain token pays for a DexScreener profile/boost (default OFF — net-negative in tracking)")
+    ap.add_argument("--no-marketing-feed", dest="marketing_feed", action="store_false")
     ap.add_argument("--near", type=float, default=70.0)
+    # NEAR-GRAD tier DISABLED by default as of 2026-07-18: outcome tracking over
+    # ~450 alerts showed it net-negative at every horizon (-27% → -34% by 8h) and
+    # its score was anti-predictive. It was also the biggest volume source
+    # (~408/day). Re-enable with --neargrad to collect more / chase the rare
+    # moonshot. Coin state (pct/price) is still updated either way.
+    ap.add_argument("--neargrad", dest="neargrad", action="store_true", default=False,
+                    help="emit NEAR-GRAD alerts (default OFF — net-negative in tracking)")
+    ap.add_argument("--no-neargrad", dest="neargrad", action="store_false")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
     token_tg, chat_id = telegram.load_creds()
     dry = args.dry_run or not (token_tg and chat_id)
     smart = load_smart()
-    dep_counts = load_deployer_counts()
+    dep_tokens = load_deployer_tokens()   # deployer -> set(token); len() = launch count
+
+    def dep_count(deployer):
+        return len(dep_tokens.get(deployer, ()))
     dep_grads = {k.lower(): v for k, v in
                  (json.load(open(os.path.join(DATA, "deployer_grads.json")))
                   if os.path.exists(os.path.join(DATA, "deployer_grads.json")) else {}).items()}
     print(f"pons PRO scanner  rule: rebuyers>={args.rebuyers} & net>={args.net}ETH & snipers<={args.snipers} "
           f"& NOT(dev-spam) & net-hold {args.hold:.0f}s & social={'required' if args.require_social else 'off'}  "
-          f"smart-wallets={len(smart)}  -> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
+          f"smart-wallets={len(smart)} (weighted)  neargrad={'on' if args.neargrad else 'off'}  "
+          f"marketing-feed={'on' if args.marketing_feed else 'off'}  "
+          f"-> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
 
     coins = {}          # token -> CoinState
     near_sent = {}      # token -> ts
@@ -394,12 +630,14 @@ def main():
             return 1900.0
     ethusd = [eth_usd()]  # boxed so we can refresh it periodically
 
-    def dispatch(text, label, buttons=None):
+    def dispatch(text, label, buttons=None, record=None):
         stamp = time.strftime("%H:%M:%S")
         if dry:
             print(f"[{stamp}] DRY {label}\n" + text, flush=True)
             return
         ok, info = telegram.send(text, token_tg, chat_id, buttons=buttons)
+        if record and ok:
+            outcomes.record_alert(**record)   # only record alerts that actually sent (no phantom outcomes)
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 
     def register_launches():
@@ -408,10 +646,14 @@ def main():
                 tok = L["token"].lower()
                 if tok in coins or not L.get("pool") or not L.get("blockNumber"):
                     continue
+                # #4: a missing/unparseable launchedAt used to leave launched_at=None,
+                # and the active filter (needs launched_at truthy) then never scanned
+                # the coin — a silent CONFIRMED miss. Fall back to now.
+                launched_at = parse_ts(L.get("launchedAt")) or time.time()
+                dep = (L.get("deployer") or "").lower()
                 coins[tok] = CoinState(tok, L["pool"], L["blockNumber"],
-                                       (L.get("deployer") or "").lower(),
-                                       L.get("symbol"), parse_ts(L.get("launchedAt")))
-                dep_counts[coins[tok].deployer] += 1
+                                       dep, L.get("symbol"), launched_at)
+                dep_tokens[dep].add(tok)   # set add — no double count on re-seen launches
         except Exception as e:  # noqa: BLE001
             print(f"  latest error: {e}", flush=True)
 
@@ -445,13 +687,14 @@ def main():
 
             # stage 1: rule passes for the first time -> start the net-hold watch
             if rule_ok and c.pending_since is None:
-                launches = dep_counts.get(c.deployer, 1)
+                # PRIOR launches = this deployer's other tokens (exclude the current one)
+                prior = max(dep_count(c.deployer) - 1, 0)
                 grads = dep_grads.get(c.deployer, 0)
                 # anti-spam gate: serial deployer that never graduated = spam factory
-                if launches > args.max_dev_launches and grads == 0:
+                if prior > args.max_dev_launches and grads == 0:
                     c.confirmed = True  # stop re-checking, never alert
                     print(f"[{time.strftime('%H:%M:%S')}] SKIP spam-deployer "
-                          f"{c.symbol or c.token[:8]} (dev x{launches}, 0 grads)", flush=True)
+                          f"{c.symbol or c.token[:8]} (dev {prior} prior, 0 grads)", flush=True)
                     continue
                 c.pending_since = now
                 c.fire_net = c.net_weth
@@ -468,14 +711,36 @@ def main():
                           flush=True)
                     continue
                 soc = dex_socials(c.token, now)
-                if args.require_social and not soc.get("has"):
+                if args.require_social and (not soc.get("has") or soc.get("depth", 0) < args.min_socials):
                     print(f"[{time.strftime('%H:%M:%S')}] DROP no-social "
-                          f"{c.symbol or c.token[:8]} (no X/web)", flush=True)
+                          f"{c.symbol or c.token[:8]} (depth {soc.get('depth', 0)})", flush=True)
                     continue
-                dispatch(fmt_confirmed(c, dep_counts.get(c.deployer, 1), args,
-                                       c.fire_net, ethusd[0], now, soc),
+                # soft gates — all default off; alerts display the values either way
+                bs_ratio = c.n_buys / c.n_sells if c.n_sells else float("inf")
+                if args.min_bs_ratio and bs_ratio < args.min_bs_ratio:
+                    print(f"[{time.strftime('%H:%M:%S')}] DROP low-bs-ratio "
+                          f"{c.symbol or c.token[:8]} ({bs_ratio:.1f} < {args.min_bs_ratio})", flush=True)
+                    continue
+                if args.min_liq_usd and soc.get("liq_usd") is not None and soc["liq_usd"] < args.min_liq_usd:
+                    print(f"[{time.strftime('%H:%M:%S')}] DROP thin-liq "
+                          f"{c.symbol or c.token[:8]} (${soc['liq_usd']:.0f})", flush=True)
+                    continue
+                if args.min_smart_score and c.smart_score < args.min_smart_score:
+                    print(f"[{time.strftime('%H:%M:%S')}] DROP low-smart "
+                          f"{c.symbol or c.token[:8]} (score {c.smart_score})", flush=True)
+                    continue
+                paid = dex_paid(c.token, now)
+                dc = max(dep_count(c.deployer), 1)   # total launches by this deployer
+                sc = score_confirmed(c, dc, soc, paid,
+                                     holder_risk(c.token, c.pool, c.deployer, now))
+                dispatch(fmt_confirmed(c, dc, args,
+                                       c.fire_net, ethusd[0], now, soc, paid),
                          f"CONFIRMED {c.symbol or c.token[:8]}",
-                         buttons=links(c.token, c.pool, soc))
+                         buttons=links(c.token, c.pool, soc),
+                         record=dict(platform="pons.family", chain="ROBINHOOD", tier="CONFIRMED",
+                                     symbol=c.symbol or c.token[:8], token=c.token, score=sc,
+                                     track={"method": "dexscreener", "chainSlug": "robinhood", "address": c.token},
+                                     price0=c.price, liq0=(soc or {}).get("liq_usd")))
 
     def check_neargrad(now):
         try:
@@ -497,6 +762,8 @@ def main():
             prog_hist[tok].append((now, paired))
             if len(prog_hist[tok]) > 10:
                 prog_hist[tok] = prog_hist[tok][-10:]
+            if not args.neargrad:      # tier disabled: state updated above, but no alert
+                continue
             if r.get("graduated") or pct < args.near:
                 continue
             h = prog_hist[tok]
@@ -505,17 +772,80 @@ def main():
                 vel = (h[-1][1] - h[0][1]) / ((h[-1][0] - h[0][0]) / 60)
             if vel <= 0:
                 continue
-            if tok in near_sent and (now - near_sent[tok]) < 600:
+            # once per coin: the 600s re-fire spammed one coin up to 33× in 11h
+            # and near-grad re-alerts added no value (outcome tracking, 2026-07-18).
+            if tok in near_sent:
                 continue
-            near_sent[tok] = now
-            sym = coins[tok].symbol if tok in coins else (r.get("symbol") or tok[:8])
+            sym = (coins[tok].symbol if tok in coins else None) or r.get("symbol") \
+                or token_symbol(tok) or tok[:8]
             soc = dex_socials(tok, now)
-            dispatch(fmt_neargrad(tok, sym, pct, paired, vel, price, launched_at, ethusd[0], now, soc),
+            paid = dex_paid(tok, now)
+            price_f = _f(price)
+            sc = score_neargrad(pct, vel, soc, paid, holders(tok, now))
+            dispatch(fmt_neargrad(tok, sym, pct, paired, vel, price_f, launched_at, ethusd[0], now, soc, paid),
                      f"NEAR-GRAD {sym or tok[:8]}",
-                     buttons=links(tok, r.get("pool"), soc))
+                     buttons=links(tok, r.get("pool"), soc),
+                     record=dict(platform="pons.family", chain="ROBINHOOD", tier="NEAR-GRAD",
+                                 symbol=sym or tok[:8], token=tok, score=sc,
+                                 track={"method": "dexscreener", "chainSlug": "robinhood", "address": tok},
+                                 price0=price_f, liq0=(soc or {}).get("liq_usd")))
+            near_sent[tok] = now   # mark AFTER dispatch: a format/send error re-arms, no permanent miss
+
+    # --- DexScreener marketing feed: teams paying for a profile/boost on our chain.
+    # Money spent on marketing is intent to push; the feed also surfaces coins from
+    # OTHER Robinhood-chain launchpads (flap etc.) that pons/latest never sees.
+    mkt_seen = set()
+    mkt_seeded = set()   # which endpoints have had one successful fetch (seeded)
+
+    def check_marketing(now):
+        import urllib.request
+        found = {}  # token -> note
+        for url, kind in (("https://api.dexscreener.com/token-profiles/latest/v1", "profile"),
+                          ("https://api.dexscreener.com/token-boosts/latest/v1", "boost")):
+            try:
+                req = urllib.request.Request(url, headers={"user-agent": "Mozilla/5.0",
+                                                           "accept": "application/json"})
+                with urllib.request.urlopen(req, timeout=8) as r:
+                    items = json.loads(r.read())
+            except Exception as e:  # noqa: BLE001
+                print(f"  marketing feed error ({kind}): {e}", flush=True)
+                continue
+            first = kind not in mkt_seeded   # seed THIS endpoint on its first success
+            for it in items or []:
+                if it.get("chainId") != "robinhood":
+                    continue
+                tok = (it.get("tokenAddress") or "").lower()
+                if not tok:
+                    continue
+                if first:
+                    mkt_seen.add(tok)        # silently seed this endpoint's backlog
+                    continue
+                if tok in mkt_seen:
+                    continue
+                note = kind if kind == "profile" else f"boost x{it.get('totalAmount') or it.get('amount') or '?'}"
+                found.setdefault(tok, []).append(note)
+            mkt_seeded.add(kind)
+        if not found:
+            return
+        for tok, notes in found.items():
+            mkt_seen.add(tok)
+            soc = dex_socials(tok, now)
+            sym = (coins[tok].symbol if tok in coins else None) or token_symbol(tok) or (tok[:10] + "…")
+            origin = "🐸 pons.family" if tok in coins else ("🦇 flap.sh" if tok.endswith("7777") else "❓ unknown launchpad")
+            dispatch("\n".join([
+                f"💰 <b>MARKETING</b> — <b>{html.escape(str(sym))}</b> · {origin} · ⛓ <b>ROBINHOOD</b>",
+                f"team paid DexScreener: <b>{' + '.join(notes)}</b>",
+                social_line(soc),
+                f'<a href="{BLOCKSCOUT}{tok}">{tok[:12]}…</a>',
+            ]), f"MARKETING {sym}", buttons=links(tok, None, soc),
+                record=dict(platform="pons.family", chain="ROBINHOOD", tier="MARKETING",
+                            symbol=str(sym), token=tok, score=None,
+                            track={"method": "dexscreener", "chainSlug": "robinhood", "address": tok},
+                            liq0=(soc or {}).get("liq_usd")))
 
     print("running… Ctrl-C to stop", flush=True)
     last_eth = [time.time()]
+    last_mkt = [0.0]
     while True:
         try:
             now = time.time()
@@ -525,6 +855,9 @@ def main():
             register_launches()
             update_swaps(now)
             check_neargrad(now)
+            if args.marketing_feed and now - last_mkt[0] > 75:  # 2 calls per pass, 60 rpm cap
+                check_marketing(now)
+                last_mkt[0] = now
             time.sleep(args.interval)
         except KeyboardInterrupt:
             print("\nstopped", flush=True)
