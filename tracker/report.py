@@ -28,6 +28,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 ALERTS = os.path.join(DATA, "alerts.jsonl")
 SNAPS = os.path.join(DATA, "snapshots.jsonl")
+VERDICTS = os.path.join(DATA, "agent_verdicts.jsonl")   # agent/analyst.py output
 
 KEY_HORIZONS = [60, 240, 480]    # 1h, 4h, 8h — MUST be values in track.py HORIZONS
                                  # (was 360, which the tracker never samples, so the
@@ -194,6 +195,20 @@ def main():
     for b in order:
         if b in bys:
             print(summarize(f"  score {b}", bys[b], horizons))
+
+    # by AI verdict (agent/analyst.py) — does the LLM DD add lift over the score?
+    verdicts = {}
+    for v in load(VERDICTS):
+        if v.get("ok") and v.get("verdict"):
+            verdicts[v["id"]] = v["verdict"]     # last verdict per alert wins
+    if verdicts:
+        print()
+        byv = defaultdict(list)
+        for a, s in pairs:
+            byv[verdicts.get(alert_id(a), "(no DD)")].append((a, s))
+        for vkey in ["BUY-WATCH", "NEUTRAL", "AVOID", "(no DD)"]:
+            if vkey in byv:
+                print(summarize(f"  AI {vkey}", byv[vkey], horizons))
 
     print("\nMetric = median return vs alert-time baseline · hit = share reaching +50%")
     print("If score bands don't separate (🟢 ≈ 🔴), the weights need refitting.\n")

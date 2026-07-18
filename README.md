@@ -50,6 +50,21 @@ concentration, curve reserve → graduation progress). 🐣 EARLY traction +
 
 - `scan.py` — live API scanner (no RPC needed)
 
+### `bags/` — GMGN trench scanner (uncovered Robinhood launchpads)
+Watches the Robinhood-chain launchpads none of the source scanners cover —
+**bags, bankr, noxa, dyorswap, virtuals-on-robinhood** — via GMGN's Trenches
+board (items arrive pre-enriched: smart/renowned counts, bot/rat rates,
+honeypot+tax, X followers). 🐣 TRENCH EARLY (traction bar) + 🚀 TRENCH GRAD.
+Needs `GMGN_API_KEY`. See `bags/README.md`.
+
+### `agent/` — Hermes AI second-opinion layer
+`analyst.py` tails the alert stream and runs **Hermes Agent** headlessly with
+the `memecoin-dd` skill on each CONFIRMED / TRENCH alert: GMGN forensics → X
+account quality → narrative → strict `VERDICT/CONF/WHY` block, posted to
+Telegram as a 🤖 AI-DD follow-up and recorded for `report.py --by-verdict`
+to score against real outcomes. Advisory until it proves lift. See
+`agent/README.md` + `docs/hermes-agent-integration.md`.
+
 ### `tracker/` — alert outcome tracking (feedback loop)
 Records every alert, follows each coin's price at 5m…48h, and reports whether
 the scores actually predicted pumps — the data for refitting score weights.
