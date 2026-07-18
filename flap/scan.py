@@ -220,14 +220,20 @@ def wave_decision(sym, prior_same, g, max_repeats):
         quality.append(f"whale {gq['whale_w']}")
     if gq.get("has_x"):
         quality.append("real X")
-    rets = [r for r in (outcomes.peak_return(p) for p in prior_same) if r is not None]
-    best_prior = max(rets) if rets else None
-    if best_prior is not None and best_prior >= 1.0:
-        return False, (f"🔁 wave #{n+1} — a prior {sym} copy peaked "
-                       f"{best_prior*100:+.0f}% (name has proven demand)"), None
     if quality:
         return False, (f"🔁 wave #{n+1} + {' · '.join(quality)} "
                        f"(possible narrative winner)"), None
+    # proven demand must come from the most RECENT copies — an old winner with
+    # every later copy dead is a farm milking its first pump (OilRig: copy #1
+    # +779%, waves 2-15 all dead, yet the any-prior-peak check re-opened the
+    # name forever -> 16 alerts in a day). A wave that's actually hot has a
+    # recent copy that ran (or quality signals above).
+    recent = sorted(prior_same, key=lambda p: p.get("t", 0))[-2:]
+    rets = [r for r in (outcomes.peak_return(p) for p in recent) if r is not None]
+    best_recent = max(rets) if rets else None
+    if best_recent is not None and best_recent >= 1.0:
+        return False, (f"🔁 wave #{n+1} — recent {sym} copy peaked "
+                       f"{best_recent*100:+.0f}% (wave still hot)"), None
     if n >= max_repeats:
         return True, None, None
     return False, None, f"⚠️ name relaunched x{n} in 24h, no quality signals (farm?)"

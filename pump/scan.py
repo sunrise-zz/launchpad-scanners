@@ -45,6 +45,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram + alertfmt + outcomes
 import alertfmt  # noqa: E402
+import gmgn  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 
@@ -158,6 +159,11 @@ def main():
     ap.add_argument("--strong-mcap", type=float, default=50_000.0,
                     help="mcap above which EARLY fires even without replies/KOTH")
     ap.add_argument("--near", type=float, default=80.0, help="GRADUATING at this %% of ~$69k")
+    # bundle gate: $FREE hit $100k mc "graduating" with 4 holders (one operator
+    # bought the whole curve). GMGN holder count is fetched pre-send; when known
+    # and below this floor the alert is suppressed. GMGN-down -> no gate.
+    ap.add_argument("--min-holders", type=int, default=20,
+                    help="skip alerts when GMGN holder count is below this (bundled launches)")
     ap.add_argument("--include-nsfw", action="store_true", default=False)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -266,6 +272,14 @@ def main():
         sym = html.escape(str(c.get("symbol") or mint[:8]))
         name = html.escape(str(c.get("name") or ""))
         prog = progress(c)
+        g = gmgn.snapshot("sol", mint)   # pre-send: display + bundle gate + record
+        holders_n = (g or {}).get("holders")
+        if holders_n is not None and holders_n < args.min_holders:
+            print(f"[{time.strftime('%H:%M:%S')}] SKIP bundle {c.get('symbol')} "
+                  f"({holders_n} holders at {human(mcap)} mc)", flush=True)
+            log_event("skip_bundle", mint=mint, sym=c.get("symbol"),
+                      holders=holders_n, mcap=mcap)
+            return
         score = score_coin(co, mcap, replies, ath, koth, tw, nsfw, vel, grad=grad)
 
         age_m = (now - co.born) / 60
@@ -281,7 +295,18 @@ def main():
             bits.append("🐦 X")
         if bits:
             pros.append(" · ".join(bits))
+        if g:
+            gb = [f"👥 {g.get('holders', '?')} holders", f"smart {g.get('smart', 0)}"]
+            if g.get("renowned"):
+                gb.append(f"renowned {g['renowned']}")
+            if g.get("bot_rate") is not None:
+                gb.append(f"bots {g['bot_rate']*100:.0f}%")
+            if g.get("bundler_w"):
+                gb.append(f"bundlers {g['bundler_w']}")
+            pros.append("🧬 GMGN " + " · ".join(gb))
         cons = []
+        if g and (g.get("top10_rate") or 0) >= 0.5:
+            cons.append(f"top10 hold {g['top10_rate']*100:.0f}%")
         if ath and mcap < 0.5 * ath:
             cons.append(f"down {100*(1-mcap/ath):.0f}% from ATH")
         if nsfw:
@@ -298,7 +323,7 @@ def main():
                  record=dict(platform="pump.fun", chain="SOLANA", tier=tier,
                              symbol=str(c.get("symbol") or mint[:8]), token=mint, score=score,
                              track={"method": "pumpfun", "address": mint},
-                             mcap0=mcap))
+                             mcap0=mcap, gmgn=g))
 
     print("running… Ctrl-C to stop", flush=True)
     while True:
