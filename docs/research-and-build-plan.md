@@ -149,6 +149,33 @@ The highest-leverage item. Once built, it powers many signals at once.
 
 ---
 
+## PART 5b — Data backends: Bitquery + Dune (cross-cutting infra MANY signals need)
+
+Not a single feature — the plumbing that unlocks Parts 1-5 cheaply. Right now we
+hand-roll everything from RPC + Blockscout + per-platform APIs. These two give
+unified, queryable access that removes most custom indexing.
+
+- ☐ **Bitquery** ($49/mo personal, free tier + free gRPC Corecast for eligible use)
+  — evaluate as the unified backend for: multi-launchpad new-token streams (pump.fun,
+  LaunchLab, Meteora DBC, Clanker, Moonshot, Boop in ONE place → covers most of Part 5),
+  first-100-buyers-still-holding query, transfer-before-buy flag, wash-forensics
+  (funding-uniformity / buy-sell $ symmetry / both-sides rate), Jito bundle API,
+  DEX-trades signed order-flow. Decide: adopt as primary stream vs keep per-platform.
+  Docs: docs.bitquery.io (Pumpfun / launchpad-raydium / meteora-dbc / Jito-Bundle / dextrades).
+- ☐ **Dune** — not for live alerts (dashboards 500 to fetchers, not real-time) but for
+  OFFLINE analysis & list-building: replicate deployer-history SQL (oladeeayo repo:
+  per-deployer graduation rate + PnL + self-buy count), alpha-wallet lists
+  (adam_tehc/pump-fun-alpha-wallets), smart-money cutoffs (>$10k realized = top 0.5%).
+  Use to SEED/refresh our smart-money list and validate thresholds, run periodically.
+- ☐ **GeckoTerminal + DexScreener free APIs** (already listed in Part 5) — the free
+  layer of the same job; start here before paying for Bitquery.
+- Decision to make: how much to centralize on Bitquery (cost + single-dependency risk)
+  vs keep our resilient per-platform on-chain detection (harder to rate-limit/kill).
+  Leaning: on-chain detection stays primary for reliability; Bitquery/Dune as an
+  enrichment + backtest + list-building layer, not the critical path.
+
+---
+
 ## PART 6 — Scoring model + validation infra (do alongside; gates trust)
 
 - ☐ **Two-archetype scoring** (organic vs narrative) instead of one blended score.
