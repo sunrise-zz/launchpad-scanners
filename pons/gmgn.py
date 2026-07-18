@@ -194,7 +194,13 @@ def snapshot(chain, address, timeout=8):
     wt = d.get("wallet_tags_stat") or {}
     dev = d.get("dev") or {}
     ath = dev.get("ath_token_info") or {}
+    link = d.get("link") or {}
     g = {
+        # socials known to GMGN (booleans kept even when False — "no X at alert
+        # time" is itself the strongest loser signal in pons outcome data)
+        "has_x": bool(link.get("twitter_username")),
+        "has_web": bool(link.get("website")),
+        "has_tg": bool(link.get("telegram")),
         # traction / attention
         "holders": d.get("holder_count"),
         "hot": d.get("hot_level"),

@@ -45,7 +45,10 @@ ALERTS = os.path.join(REPO, "tracker", "data", "alerts.jsonl")
 VERDICTS = os.path.join(REPO, "tracker", "data", "agent_verdicts.jsonl")
 HERMES = os.path.expanduser("~/.local/bin/hermes")
 
-DEFAULT_TIERS = "CONFIRMED,TRENCH EARLY,TRENCH GRAD"
+# A tier entry may carry a minimum score as "TIER:55" — FLAP EARLY fires ~73/day
+# (too chatty to DD all of them), but its score>=55 slice is ~18/day and flap is
+# the proven-profitable source, so those earn a second opinion.
+DEFAULT_TIERS = "CONFIRMED,TRENCH EARLY,TRENCH GRAD,FLAP EARLY:55"
 VERDICT_EMOJI = {"BUY-WATCH": "🟢", "NEUTRAL": "⚪️", "AVOID": "⛔"}
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
 
@@ -136,11 +139,24 @@ def main():
     ap.add_argument("--poll", type=float, default=5.0)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
-    tiers = {t.strip() for t in args.tiers.split(",") if t.strip()}
+    tiers = {}   # tier -> min score (0 = all)
+    for t in args.tiers.split(","):
+        t = t.strip()
+        if not t:
+            continue
+        name, _, minsc = t.rpartition(":")
+        if name and minsc.isdigit():
+            tiers[name.strip()] = int(minsc)
+        else:
+            tiers[t] = 0
+
+    def want(a):
+        tier = a.get("tier")
+        return tier in tiers and (a.get("score") or 0) >= tiers[tier]
 
     token_tg, chat_id = telegram.load_creds()
     dry = args.dry_run or not (token_tg and chat_id)
-    print(f"AI analyst  tiers={sorted(tiers)}  model={args.model or '(hermes default)'}  "
+    print(f"AI analyst  tiers={tiers}  model={args.model or '(hermes default)'}  "
           f"hermes={'ok' if os.path.exists(HERMES) else 'MISSING'}  "
           f"-> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
 
@@ -183,7 +199,7 @@ def main():
                     rows.append(json.loads(ln))
                 except Exception:  # noqa: BLE001
                     pass
-            pending = [a for a in rows if a.get("tier") in tiers][-args.backfill:]
+            pending = [a for a in rows if want(a)][-args.backfill:]
 
     print("running… Ctrl-C to stop", flush=True)
     while True:
@@ -207,7 +223,7 @@ def main():
                             a = json.loads(ln)
                         except Exception:  # noqa: BLE001
                             continue
-                        if a.get("tier") in tiers:
+                        if want(a):
                             pending.append(a)
             time.sleep(args.poll)
         except KeyboardInterrupt:

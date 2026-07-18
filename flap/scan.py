@@ -47,6 +47,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "vlad"))   # rpc (QuickNode Robinhood)
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram sender
 import alertfmt  # noqa: E402
+import gmgn  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 from rpc import rpc  # noqa: E402
@@ -180,6 +181,35 @@ def links(token):
              ("🔗 Scan", f"{BLOCKSCOUT}{token}")]]
 
 
+def gmgn_line(g):
+    """One pros line from the GMGN snapshot (fetched pre-send; flap's own batman
+    API misses many brand-new coins entirely — GMGN indexes them in seconds)."""
+    if not g:
+        return None
+    bits = [f"smart <b>{g.get('smart', 0)}</b>", f"renowned {g.get('renowned', 0)}"]
+    if g.get("bot_rate") is not None:
+        bits.append(f"bots {g['bot_rate']*100:.0f}%")
+    soc = [b for b, on in (("🐦X", g.get("has_x")), ("🌐web", g.get("has_web")),
+                           ("💬TG", g.get("has_tg"))) if on]
+    if soc:
+        bits.append(" ".join(soc))
+    return "🧬 GMGN " + " · ".join(bits)
+
+
+def gmgn_tax(addr):
+    """Tax gate fallback via GMGN token_security when batman doesn't know the
+    coin. Returns (line, buy_bps, sell_bps, known)."""
+    sec = gmgn.token_security("robinhood", addr) or {}
+    try:
+        buy_bps = int(round(float(sec.get("buy_tax")) * 10000))
+        sell_bps = int(round(float(sec.get("sell_tax")) * 10000))
+    except (TypeError, ValueError):
+        return "🧾 tax: ？ (both APIs unavailable — check before buying)", 0, 0, False
+    if str(sec.get("is_honeypot")) == "1":
+        return "⛔ GMGN honeypot flag", 10_000, 10_000, True   # force the tax gate to drop it
+    return f"🧾 tax: buy {buy_bps/100:.0f}% / sell {sell_bps/100:.0f}% (GMGN)", buy_bps, sell_bps, True
+
+
 class Tok:
     __slots__ = ("addr", "birth_block", "birth_ts", "recips", "transfers", "alerted", "dead")
 
@@ -294,12 +324,14 @@ def main():
                 continue
             t.alerted = True   # one shot per token, decided before the API round-trip
             d = api_get(f"coin/{t.addr}") or {}
+            g = gmgn.snapshot("robinhood", t.addr)   # display + record (GMGN indexes in seconds)
+            tax_known = True
             if d:
                 tl, buy_bps, sell_bps = tax_line(d.get("tax"))
             else:
-                # API unreachable: alert on on-chain traction alone, but be honest
-                # that the tax gate could NOT run — don't print "none ✅"
-                tl, buy_bps, sell_bps = "🧾 tax: ？ (api unavailable — check before buying)", 0, 0
+                # batman doesn't know the coin (common for brand-new launches) —
+                # run the tax/honeypot gate via GMGN instead of skipping it
+                tl, buy_bps, sell_bps, tax_known = gmgn_tax(t.addr)
             if sell_bps > args.max_sell_tax or buy_bps > args.max_buy_tax:
                 print(f"[{time.strftime('%H:%M:%S')}] SKIP high-tax {t.addr[:10]} "
                       f"(buy {buy_bps} / sell {sell_bps} bps)", flush=True)
@@ -314,11 +346,12 @@ def main():
             s += min(max(len(t.recips) - args.min_recips, 0) / 10, 15)   # traction beyond the bar
             s += min(t.transfers / 100, 8)
             s += 10 if d.get("isLowRisk") else 0              # platform FAC check
-            if d:
-                s += 8 if not (d.get("tax") or {}).get("hasTax") else (4 if sell_bps <= 200 else 0)
-                s += 6 if (d.get("holdersCount") or 0) >= 100 else 0
+            hc = (d.get("holdersCount") if d else None) or (g or {}).get("holders")
+            if tax_known:   # tax numbers from batman OR GMGN — same gate either way
+                s += 8 if (buy_bps == 0 and sell_bps == 0) else (4 if sell_bps <= 200 else 0)
             else:
                 s -= 10                                       # tax gate could not run
+            s += 6 if (hc or 0) >= 100 else 0
             s -= 8 if (top1 or 0) >= 30 else 0
             score = alertfmt.clamp(s)
 
@@ -330,14 +363,25 @@ def main():
                 if d.get("isLowRisk"):
                     bits.append("🛡️ FAC low-risk")
                 pros.append(" · ".join(bits))
+            elif g:
+                bits = [f"👥 {g.get('holders') or '?'} holders"]
+                if g.get("pad_progress"):
+                    bits.append(f"📊 {g['pad_progress']*100:.0f}% to grad")
+                pros.append(" · ".join(bits))
+            gl = gmgn_line(g)
+            if gl:
+                pros.append(gl)
 
             cons = []
             if sell_bps or buy_bps:
-                cons.append(f"tax buy {buy_bps/100:.0f}% / sell {sell_bps/100:.0f}%")
-            if not d:
-                cons.append("tax ？ (api unavailable — check before buying)")
+                cons.append(f"tax buy {buy_bps/100:.0f}% / sell {sell_bps/100:.0f}%"
+                            + ("" if d else " (GMGN)"))
+            if not tax_known:
+                cons.append("tax ？ (apis unavailable — check before buying)")
             if top1 is not None and top1 >= 30:
                 cons.append(f"top wallet {top1:.0f}% of top-20 pot")
+            elif g and (g.get("top10_rate") or 0) >= 0.5:
+                cons.append(f"top10 hold {g['top10_rate']*100:.0f}% (GMGN)")
 
             stats = []
             if d:
@@ -355,7 +399,8 @@ def main():
                                  track={"method": "flap", "address": t.addr},
                                  price0=d.get("price") if d else None,
                                  mcap0=d.get("marketCap") if d else None,
-                                 liq0=d.get("liquidity") if d else None))
+                                 liq0=d.get("liquidity") if d else None,
+                                 gmgn=g))
         for a in expired:
             del toks[a]
 
@@ -390,9 +435,13 @@ def main():
             s += 5 if (it.get("holders") or 0) >= 100 else 0
             score = alertfmt.clamp(s)
 
+            g = gmgn.snapshot("robinhood", addr)
             pros = [f"📊 <b>{prog:.0f}%</b> to grad · 👥 {it.get('holders') or '?'} holders"
                     + (" · 🛡️ FAC low-risk" if it.get("isLowRisk") else ""),
                     f"Δ 5m {it.get('change5m')}% · 1h {it.get('change1h')}% · vol24h {human_usd(it.get('volume24h'))}"]
+            gl = gmgn_line(g)
+            if gl:
+                pros.append(gl)
             cons = []
             if sell_bps or buy_bps:
                 cons.append(f"tax buy {buy_bps/100:.0f}% / sell {sell_bps/100:.0f}%")
@@ -405,7 +454,8 @@ def main():
                      record=dict(platform="flap.sh", chain="ROBINHOOD", tier="FLAP NEAR-GRAD",
                                  symbol=str(sym), token=addr, score=score,
                                  track={"method": "flap", "address": addr},
-                                 mcap0=it.get("marketCap"), liq0=it.get("liquidity")))
+                                 mcap0=it.get("marketCap"), liq0=it.get("liquidity"),
+                                 gmgn=g))
 
     print("running… Ctrl-C to stop", flush=True)
     last_grad = [0.0]
