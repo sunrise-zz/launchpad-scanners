@@ -452,7 +452,18 @@ def score_confirmed(c, dep_count, soc, paid, r):
     s += min(c.rebuyers - 6, 6) * 2                      # conviction beyond the bar
     s += min(max(c.net_weth - 1.0, 0), 3) * 4            # net ETH beyond the bar
     s += min(c.smart_score, 10)                          # weighted smart money
-    s += (soc.get("depth", 0) if soc else 0) * 3         # winners: 78% have socials
+    # capital efficiency (research #1): ETH raised PER buy. The strongest
+    # graduation predictor in two studies — real conviction arrives in size, bots
+    # churn many micro-buys. avg buy >= 0.1 ETH is a strong-hand signal.
+    if c.n_buys:
+        cap_eff = c.buy_weth / c.n_buys
+        s += 8 if cap_eff >= 0.1 else (4 if cap_eff >= 0.03 else 0)
+    # Telegram-weighted socials (research #5): TG presence = 8.9x graduation lift,
+    # all-three = 17x. Weight TG higher than the raw channel count.
+    if soc:
+        s += (soc.get("depth", 0)) * 2                   # base per-channel
+        s += 4 if soc.get("tg") else 0                   # Telegram bonus
+        s += 4 if (soc.get("x") and soc.get("tg") and soc.get("web")) else 0  # full triple
     s += 8 if paid else 0                                # team spends on marketing
     if c.n_sells:
         ratio = c.n_buys / c.n_sells
@@ -488,7 +499,8 @@ def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None, 
     score = score_confirmed(c, dep_count, soc, paid, r)
 
     bs = f"{c.n_buys}/{c.n_sells}" + (f" ({c.n_buys/c.n_sells:.1f}x)" if c.n_sells else "")
-    pros = [f"rebuyers <b>{c.rebuyers}</b> · net <b>{c.net_weth:+.2f}</b>Ξ · buys/sells {bs}"]
+    cap = f" · avg {c.buy_weth/c.n_buys:.3f}Ξ/buy" if c.n_buys else ""
+    pros = [f"rebuyers <b>{c.rebuyers}</b> · net <b>{c.net_weth:+.2f}</b>Ξ · buys/sells {bs}{cap}"]
     if c.smart_hits:
         pros.append(f"🧠 smart {len(c.smart_hits)} กระเป๋า (score {c.smart_score})")
     socbits = [b for b, on in (("🐦 X", soc and soc.get("x")), ("🌐 web", soc and soc.get("web")),

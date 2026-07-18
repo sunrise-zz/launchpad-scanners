@@ -131,9 +131,13 @@ class Coin:
         return (m1 - m0) / dt if dt > 0 else 0.0
 
 
-def score_coin(c, mcap, replies, ath, koth, twitter, nsfw, vel, grad=False):
+def score_coin(c, mcap, replies, ath, koth, twitter, nsfw, vel, grad=False, g=None):
     """Heuristic 0-100. Base 45 (crossed the bar). Climb quality, community and
-    momentum push it; dumping-from-ATH and nsfw pull it down. v1 weights."""
+    momentum push it; dumping-from-ATH and nsfw pull it down. v1 weights.
+
+    g = GMGN snapshot (already fetched pre-send). Research meta-finding: raw
+    activity is what bots fake, so the ORGANIC-quality fields from GMGN
+    (bundler/rat/sniper-hold down, smart/renowned/bluechip up) are the real edge."""
     s = 55.0 if grad else 45.0
     s += 10 if mcap >= 40_000 else (6 if mcap >= 25_000 else 0)
     s += min(vel / 1000, 12)                      # $1k/min of climb ≈ +1, capped
@@ -145,6 +149,15 @@ def score_coin(c, mcap, replies, ath, koth, twitter, nsfw, vel, grad=False):
     s += 8 if koth else 0                          # King of the Hill
     s += 5 if twitter else 0
     s -= 5 if nsfw else 0
+    if g:
+        # organic-quality overlay (rates are 0-1). Penalise coordinated supply,
+        # reward cross-platform smart money.
+        s += min(g.get("smart") or 0, 5) * 2         # smart wallets holding
+        s += min(g.get("renowned") or 0, 3) * 2      # renowned wallets
+        s -= 12 if (g.get("bundler_rate") or 0) >= 0.30 else 0   # bundled supply
+        s -= 10 if (g.get("rat_rate") or 0) >= 0.15 else 0       # insider/rat supply
+        s -= 8 if (g.get("sniper70_rate") or 0) >= 0.30 else 0   # snipers still holding = overhang
+        s -= 6 if (g.get("bot_rate") or 0) >= 0.50 else 0        # bot-dominated flow
     return alertfmt.clamp(s)
 
 
@@ -280,7 +293,7 @@ def main():
             log_event("skip_bundle", mint=mint, sym=c.get("symbol"),
                       holders=holders_n, mcap=mcap)
             return
-        score = score_coin(co, mcap, replies, ath, koth, tw, nsfw, vel, grad=grad)
+        score = score_coin(co, mcap, replies, ath, koth, tw, nsfw, vel, grad=grad, g=g)
 
         age_m = (now - co.born) / 60
         pros = [f"💰 mc <b>{human(mcap)}</b> · 📈 +{human(vel)}/min · 📊 {prog:.0f}% to grad · ⏱️ {age_m:.0f}m"]
