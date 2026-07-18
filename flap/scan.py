@@ -263,7 +263,24 @@ def main():
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 
     toks = {}            # addr -> Tok
+    # near-grad dedup is PERSISTED: the graduatinghot board holds the same ~20
+    # coins for hours, so a memory-only set re-alerts every one of them after
+    # every restart (OIL CAT went out 5x on 2026-07-18's deploy day).
+    near_file = os.path.join(DATA, "neargrad_sent.txt")
     near_sent = {}       # addr -> ts
+    if os.path.exists(near_file):
+        for ln in open(near_file):
+            a = ln.strip().lower()
+            if a:
+                near_sent[a] = 0.0
+
+    def mark_near(addr):
+        near_sent[addr] = time.time()
+        try:
+            with open(near_file, "a") as f:
+                f.write(addr + "\n")
+        except Exception:  # noqa: BLE001
+            pass
     cursor = [int(rpc("eth_blockNumber", []), 16)]   # start at head: only future launches
 
     def poll_chain(now):
@@ -421,7 +438,7 @@ def main():
             tl, buy_bps, sell_bps = tax_line(it.get("tax"))
             if sell_bps > args.max_sell_tax or buy_bps > args.max_buy_tax:
                 continue
-            near_sent[addr] = now
+            mark_near(addr)   # persisted — restarts must not re-alert the board
             sym = coin.get("symbol") or token_symbol(addr) or addr[:8]
 
             # heuristic score: base 40 (progress tier), momentum + safety shift it

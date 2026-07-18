@@ -643,6 +643,23 @@ def main():
     near_sent = {}      # token -> ts
     prog_hist = defaultdict(list)  # token -> [(t, paired)]
 
+    # CONFIRMED dedup persisted across restarts: a restart within a coin's
+    # 15-min active window re-ingests its swaps from launch block, re-passes
+    # the rule and would re-alert after the hold (same class of bug as flap's
+    # near-grad board re-fire on 2026-07-18).
+    conf_file = os.path.join(DATA, "confirmed_sent.txt")
+    conf_sent = set()
+    if os.path.exists(conf_file):
+        conf_sent = {ln.strip().lower() for ln in open(conf_file) if ln.strip()}
+
+    def mark_conf(token):
+        conf_sent.add(token)
+        try:
+            with open(conf_file, "a") as f:
+                f.write(token + "\n")
+        except Exception:  # noqa: BLE001
+            pass
+
     def eth_usd():
         try:
             return api.get(api.EP_MARKET, {"token": WETH}).get("ethUsd") or 1900.0
@@ -711,6 +728,9 @@ def main():
 
             # stage 1: rule passes for the first time -> start the net-hold watch
             if rule_ok and c.pending_since is None:
+                if c.token in conf_sent:      # already alerted before a restart
+                    c.confirmed = True
+                    continue
                 # PRIOR launches = this deployer's other tokens (exclude the current one)
                 prior = max(dep_count(c.deployer) - 1, 0)
                 grads = dep_grads.get(c.deployer, 0)
@@ -753,6 +773,7 @@ def main():
                     print(f"[{time.strftime('%H:%M:%S')}] DROP low-smart "
                           f"{c.symbol or c.token[:8]} (score {c.smart_score})", flush=True)
                     continue
+                mark_conf(c.token)   # persisted BEFORE dispatch: restarts never re-alert
                 paid = dex_paid(c.token, now)
                 g = gmgn.snapshot("robinhood", c.token)   # one call: display + record
                 dc = max(dep_count(c.deployer), 1)   # total launches by this deployer
