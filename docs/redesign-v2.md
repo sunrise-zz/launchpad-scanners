@@ -123,3 +123,7 @@ a shadow tier goes live when its tracked P(2x) ≥ 40% on n ≥ 20.
   numbers a human sees once P3 lands.
 - 2026-07-18: shadow experiments launched (SHADOW-60 / SHADOW-XFER / TRENCH
   BURST) after the GMGN ATH backtest; live-bar changes await tracked peaks.
+- 2026-07-18: P4 exit coach live (tracker/coach.py) — 2x/5x/retrace/dead
+  milestones into the alert bubble via the shared append journal
+  (telegram.append_to_alert), actionable ones also reply-ping. Its own
+  events land in coach_events.jsonl so sell-at-2x vs hold gets measured.

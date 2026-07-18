@@ -191,10 +191,11 @@ def main():
                 tg = a.get("tg") or {}
                 sent, info, mode = False, "", "edit"
                 if tg.get("msg_id") and tg.get("text"):
-                    # preferred: grow the original alert bubble (no new message,
-                    # no re-notify) — verdict lands attached to its coin
-                    sent, info = telegram.edit(tg["text"] + fmt_section(v), tg["msg_id"],
-                                               token_tg, chat_id, buttons=tg.get("buttons"))
+                    # preferred: grow the original alert bubble via the shared
+                    # append journal (the exit coach grows the same bubble —
+                    # append_to_alert keeps both daemons' sections intact)
+                    sent, info = telegram.append_to_alert(a, fmt_section(v),
+                                                          token_tg, chat_id)
                 if not sent and tg.get("msg_id"):
                     mode = "reply"     # edit failed (deleted/too old) -> thread under it
                     sent, info = telegram.send(fmt_msg(a, v), token_tg, chat_id,

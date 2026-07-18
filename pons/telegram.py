@@ -143,6 +143,42 @@ def edit(text, message_id, token=None, chat_id=None, buttons=None, **kw):
     return send(text, token, chat_id, buttons=buttons, edit_id=message_id, **kw)
 
 
+_APPENDS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                        "..", "tracker", "data", "msg_appends.jsonl")
+
+
+def append_to_alert(alert_row, suffix, token=None, chat_id=None):
+    """Append a section to an already-sent alert bubble, cooperatively.
+
+    Multiple daemons grow the same message (analyst adds 🤖 AI-DD, the exit
+    coach adds 🎯/💀 milestones). The bot API can't read a message back, so
+    each append is journaled to msg_appends.jsonl and the bubble is re-rendered
+    as original + ALL suffixes in arrival order — appenders can interleave
+    without wiping each other. Returns send()'s (ok, info)."""
+    tg = alert_row.get("tg") or {}
+    aid = f"{alert_row['t']:.0f}:{alert_row.get('token')}"
+    if not (tg.get("msg_id") and tg.get("text")):
+        return False, "no tg metadata on alert row"
+    try:
+        os.makedirs(os.path.dirname(_APPENDS), exist_ok=True)
+        with open(_APPENDS, "a") as f:
+            f.write(json.dumps({"id": aid, "t": time.time(), "suffix": suffix},
+                               ensure_ascii=False) + "\n")
+        suffixes = []
+        for ln in open(_APPENDS):
+            try:
+                r = json.loads(ln)
+            except Exception:  # noqa: BLE001
+                continue
+            if r.get("id") == aid:
+                suffixes.append((r.get("t", 0), r.get("suffix") or ""))
+        suffixes.sort(key=lambda x: x[0])
+        body = tg["text"] + "".join(s for _, s in suffixes)
+    except Exception:  # noqa: BLE001
+        body = tg["text"] + suffix   # journal failed — degrade to single append
+    return send(body, token, chat_id, buttons=tg.get("buttons"), edit_id=tg["msg_id"])
+
+
 if __name__ == "__main__":
     # quick credential test: python3 analysis/pons/telegram.py
     ok, info = send("✅ pons scanner: Telegram wired up.")
