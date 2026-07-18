@@ -101,6 +101,32 @@ def log_event(kind, **kw):
         pass
 
 
+_SYM = {}   # token -> resolved ERC20 symbol (cached)
+
+
+def token_symbol(addr):
+    """On-chain ERC20 symbol() — the fallback when the batman API is rate-limited
+    (Cloudflare) and can't name the coin, so alerts don't degrade to a raw 0x…
+    address. Decodes both ABI dynamic-string and legacy bytes32 returns. Cached."""
+    if addr in _SYM:
+        return _SYM[addr]
+    sym = None
+    try:
+        r = rpc("eth_call", [{"to": addr, "data": "0x95d89b41"}, "latest"], timeout=8)
+        if r and r != "0x":
+            raw = bytes.fromhex(r[2:])
+            if len(raw) >= 64:                       # dynamic string [offset][len][data]
+                length = int.from_bytes(raw[32:64], "big")
+                if 0 < length <= 64:
+                    sym = raw[64:64 + length].decode("utf-8", "ignore").strip("\x00").strip() or None
+            if not sym:                              # legacy bytes32
+                sym = raw[:32].decode("utf-8", "ignore").strip("\x00").strip() or None
+    except Exception:  # noqa: BLE001
+        sym = None
+    _SYM[addr] = sym
+    return sym
+
+
 def human_usd(x):
     if x is None:
         return "?"
@@ -279,7 +305,7 @@ def main():
                       f"(buy {buy_bps} / sell {sell_bps} bps)", flush=True)
                 log_event("skip_tax", addr=t.addr, buy=buy_bps, sell=sell_bps)
                 continue
-            sym = d.get("symbol") or t.addr[:8]
+            sym = d.get("symbol") or token_symbol(t.addr) or t.addr[:8]
             name = d.get("name") or ""
             top1, top10 = concentration(d) if d else (None, None)
 
@@ -349,7 +375,7 @@ def main():
             if sell_bps > args.max_sell_tax or buy_bps > args.max_buy_tax:
                 continue
             near_sent[addr] = now
-            sym = coin.get("symbol") or addr[:8]
+            sym = coin.get("symbol") or token_symbol(addr) or addr[:8]
 
             # heuristic score: base 40 (progress tier), momentum + safety shift it
             s = 40.0
