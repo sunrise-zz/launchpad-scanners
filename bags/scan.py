@@ -190,6 +190,15 @@ def main():
     ap.add_argument("--max-sell-tax", type=float, default=0.05, help="honeypot gate (ratio)")
     ap.add_argument("--pads", default=",".join(PADS),
                     help="comma-separated launchpad_platform keys to watch")
+    # TRENCH BURST shadow experiment (redesign-v2 P2): the flap goldmine's
+    # mechanic is a first-minutes distinct-buyer burst. Its twin here is holder
+    # VELOCITY from the trenches feed we already poll. Recorded silently into
+    # the tracker (no Telegram) until outcomes prove the bar.
+    ap.add_argument("--burst-gain", type=int, default=25,
+                    help="holders gained within --burst-window to shadow-record (0=off)")
+    ap.add_argument("--burst-window", type=float, default=600.0, help="seconds")
+    ap.add_argument("--burst-max-age-m", type=float, default=60.0,
+                    help="only coins younger than this (minutes)")
     ap.add_argument("--once", action="store_true", help="one pass, print candidates, exit")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
@@ -221,6 +230,8 @@ def main():
     early_sent = set()
     grad_sent = set()
     seeded = set()        # section names that had one successful poll (seed pass)
+    hol_hist = {}         # addr -> [(ts, holders)] for burst velocity
+    burst_sent = set()
 
     def record_for(it, tier, score):
         return dict(platform=it.get("launchpad") or "trench", chain="ROBINHOOD", tier=tier,
@@ -246,6 +257,30 @@ def main():
                 if not addr:
                     continue
                 it["address"] = addr
+
+                if sec in ("new_creation", "pump") and args.burst_gain:
+                    h_now = int(fnum(it, "holder_count"))
+                    hist = hol_hist.setdefault(addr, [])
+                    hist.append((now, h_now))
+                    if len(hist) > 30:
+                        del hist[:len(hist) - 30]
+                    am_b = age_min(it, now)
+                    pts = [hh for tt, hh in hist if now - tt <= args.burst_window]
+                    if (addr not in burst_sent and addr not in early_sent
+                            and am_b is not None and am_b <= args.burst_max_age_m
+                            and pts and h_now - pts[0] >= args.burst_gain):
+                        burst_sent.add(addr)
+                        log_event("burst_shadow", addr=addr, pad=it.get("launchpad"),
+                                  sym=it.get("symbol"), holders=h_now,
+                                  gain=h_now - pts[0], age_m=round(am_b, 1))
+                        # tracker-only: outcomes decide whether BURST becomes a live tier
+                        outcomes.record_alert(it.get("launchpad") or "trench", "ROBINHOOD",
+                                              "TRENCH BURST", str(it.get("symbol") or addr[:8]),
+                                              addr, None,
+                                              {"method": "gmgn", "chainSlug": "robinhood",
+                                               "address": addr},
+                                              mcap0=it.get("usd_market_cap") or it.get("market_cap"),
+                                              liq0=it.get("liquidity"))
 
                 if sec == "new_creation":
                     if addr in seen_new:
@@ -302,6 +337,8 @@ def main():
                     dispatch(body, f"TRENCH GRAD {it.get('symbol')}", buttons=links(it),
                              record=record_for(it, "TRENCH GRAD", score))
             seeded.add(sec)
+        for a_ in [a_ for a_, hh in hol_hist.items() if hh and now - hh[-1][0] > 7200]:
+            del hol_hist[a_]
 
     if args.once:
         # diagnostic single pass: show every pump-section coin vs the bar

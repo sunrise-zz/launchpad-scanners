@@ -88,9 +88,38 @@ tracker  unchanged — it is the ground truth everything answers to.
 - **P5 — AI deepening.** Verdicts join the feature set; skill self-review
   keeps pruning its own blind spots.
 
+## P2 evidence — the flap bar backtest (2026-07-18)
+
+Method: for coins the scanner *discarded*, estimate peak multiple as
+`ath_price / initial_curve_price` from GMGN token_info (initial reserves are
+per-coin — dev prebuys differ). Calibrated against the 11 tracked alerts with
+real peaks: median real/est ratio 1.11 → estimator honest to ~11%.
+
+| discarded zone | n | P(≥2x est) | P(≥5x) | med mult |
+|---|---|---|---|---|
+| recips 60-79 (sub-bar) | 135 | **81%** | 76% | **x10.4** |
+| recips ≥80, transfers<150 | 97 | **77%** | 46% | x4.7 |
+| recips 40-59 | 104 | 30% | 21% | x0 |
+
+The live bar (80 recips & 150 transfers) has been discarding a vein ~10x the
+size of what it alerts. Known bias: a discarded coin's ATH can predate the
+would-be alert moment (farm spike-and-die), so these numbers are an upper
+bound — hence shadow mode, not an immediate bar drop.
+
+**Shadow experiments running (tracker-only, no Telegram):**
+- flap `FLAP SHADOW-60` (recips 60-79 at crossing) and `FLAP SHADOW-XFER`
+  (recips ≥80, transfers <150) — `--shadow-min-recips`.
+- bags `TRENCH BURST` — the flap mechanic's twin on uncovered pads: holder
+  velocity ≥25 gained within 10 min, coin ≤60 min old (`--burst-*`).
+Post-signal peaks land in tier_stats within ~2-3 days; analyze.py then
+decides whether the live bar drops / BURST goes live. Decision rule agreed:
+a shadow tier goes live when its tracked P(2x) ≥ 40% on n ≥ 20.
+
 ## Decision log
 
 - 2026-07-18: NEAR-GRAD + MARKETING stay off (confirmed by clean numbers).
 - 2026-07-18: CONFIRMED demoted to quarantine pending target change.
 - 2026-07-18: hand-tuned scores declared decorative; P(2x)/EV become the
   numbers a human sees once P3 lands.
+- 2026-07-18: shadow experiments launched (SHADOW-60 / SHADOW-XFER / TRENCH
+  BURST) after the GMGN ATH backtest; live-bar changes await tracked peaks.

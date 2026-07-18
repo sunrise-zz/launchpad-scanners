@@ -254,7 +254,7 @@ def gmgn_tax(addr):
 
 
 class Tok:
-    __slots__ = ("addr", "birth_block", "birth_ts", "recips", "transfers", "alerted", "dead")
+    __slots__ = ("addr", "birth_block", "birth_ts", "recips", "transfers", "alerted", "shadowed", "dead")
 
     def __init__(self, addr, birth_block, birth_ts):
         self.addr = addr
@@ -263,6 +263,7 @@ class Tok:
         self.recips = set()
         self.transfers = 0
         self.alerted = False
+        self.shadowed = False
         self.dead = False
 
 
@@ -287,6 +288,13 @@ def main():
     # warning con), third+ is suppressed.
     ap.add_argument("--max-name-repeats", type=int, default=2,
                     help="skip EARLY when this many same-name alerts already fired in 24h")
+    # SHADOW experiment (redesign-v2 P2): GMGN ATH backtest says the 60-79
+    # recips zone hits est-2x ~81% (n=135) and recips>=80-but-transfers<150
+    # ~77% (n=97) — both currently discarded. Record them into the tracker
+    # WITHOUT alerting so post-signal peaks (true entry basis) decide whether
+    # the live bar drops. 0 = off.
+    ap.add_argument("--shadow-min-recips", type=int, default=60,
+                    help="silently track coins crossing this recips bar (bar research; 0=off)")
     ap.add_argument("--near", type=float, default=70.0,
                     help="graduatinghot progress %% for NEAR-GRAD alerts")
     ap.add_argument("--dry-run", action="store_true")
@@ -387,7 +395,20 @@ def main():
                 t.dead = True
                 log_event("expired", addr=t.addr, recips=len(t.recips), transfers=t.transfers)
                 continue
-            if len(t.recips) < args.min_recips or t.transfers < args.min_transfers:
+            live_ok = len(t.recips) >= args.min_recips and t.transfers >= args.min_transfers
+            if (args.shadow_min_recips and not t.shadowed and not live_ok
+                    and len(t.recips) >= args.shadow_min_recips):
+                # tracker-only record: no Telegram, no dedup interference; the
+                # coin can still promote to a live EARLY alert later.
+                t.shadowed = True
+                stier = ("FLAP SHADOW-XFER" if len(t.recips) >= args.min_recips
+                         else "FLAP SHADOW-60")
+                ssym = token_symbol(t.addr) or t.addr[:8]
+                log_event("shadow", addr=t.addr, tier=stier,
+                          recips=len(t.recips), transfers=t.transfers)
+                outcomes.record_alert("flap.sh", "ROBINHOOD", stier, str(ssym), t.addr,
+                                      None, {"method": "flap", "address": t.addr})
+            if not live_ok:
                 continue
             t.alerted = True   # one shot per token, decided before the API round-trip
             d = api_get(f"coin/{t.addr}") or {}

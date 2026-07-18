@@ -135,6 +135,20 @@ def trenches(chain, platforms, types=("new_creation", "near_completion", "comple
     return _post("/v1/trenches", {"chain": chain}, body, timeout)
 
 
+def kline(chain, address, resolution="5m", frm=None, to=None, timeout=10):
+    """OHLCV candles. Used to backtest bars on coins we never tracked (peak
+    since launch = max(high)/first(open)) and later by the exit coach."""
+    p = {"chain": chain, "address": address, "resolution": resolution}
+    if frm is not None:
+        p["from"] = int(frm)
+    if to is not None:
+        p["to"] = int(to)
+    d = _get("/v1/market/token_kline", p, timeout)
+    if isinstance(d, dict):
+        d = d.get("list") or d.get("kline") or d.get("data")
+    return d if isinstance(d, list) else None
+
+
 def token_info(chain, address, timeout=8):
     return _get("/v1/token/info", {"chain": chain, "address": address}, timeout)
 
