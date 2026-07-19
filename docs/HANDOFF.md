@@ -26,9 +26,15 @@ sources live in the other docs; this is what to act on.
   (brand-new pairs are noisy; winner ≈ 1-in-20k → FP tolerance is brutal).
 
 ### KNOWN OPEN OPERATIONAL ISSUE
-- **pons.family API was DOWN** (DNS unresolvable) during the last research — the live pons scanner errors
-  ("recent-buys/latest failed, nodename nor servname"). Check if back; consider a health-check (it currently
-  just logs+retries silently). Robinhood chain RPC (QuickNode) + Blockscout + GoPlus were all UP.
+- **pons.family is NXDOMAIN — the pons scanner is fully dark.** Re-checked 2026-07-19 ~13:00: both
+  `pons.family` and `www.pons.family` return NXDOMAIN (not SERVFAIL/timeout — the domain does not resolve
+  at all), curl → 000. This has now persisted >12h, so treat it as *the platform is gone//renamed*, not a
+  transient outage. The scanner starts fine but every poll errors ("recent-buys/latest failed, nodename nor
+  servname"); it just logs+retries silently, so it looks alive in `launchctl` while emitting nothing.
+  → Decide: (a) add a health-check that alerts when a feed is dead N minutes, and (b) if pons is really gone,
+  either retire the scanner or rebuild its feed on RPC — wave 21 already reconstructed full launch-time
+  factors from QuickNode RPC + Blockscout alone, so an API-free pons path is proven feasible.
+  Robinhood chain RPC (QuickNode) + Blockscout were UP.
 
 ---
 
@@ -47,8 +53,16 @@ sources live in the other docs; this is what to act on.
 
 ## PRIORITIZED BUILD BACKLOG
 
-### TIER A — real-data-backed, from OUR platforms (waves 20-24). Do these FIRST.
+### TIER A — ✅ SHIPPED 2026-07-19 (items 1-5; item 6 killed by measurement).
 Each is proven on our own coins, not a paper. Ordered by ROI/effort.
+**Status: 1-5 implemented, compiled, dry-run smoke-tested, live. 6 = do not build (see below).**
+Measured effect on synthetic profiles built from the wave-21/24 medians (winner vs died-control):
+pons 82→81 winner / 44→24 died-FP (gap 38→57); virtuals 95 vs 29; pump 98 (TG+web+X) vs 83 (none).
+⚠️ These weights are DIRECTIONAL, fitted by hand on tiny n (pons control n=9, flap 12w/5l). They are the
+best available prior, NOT a calibrated model — Tier B #8 (WOE refit on tracker data) still supersedes them.
+To make that refit possible, pons now logs its raw launch-time factors (`f={rebuyers,net_weth,top_share,
+cap_eff,...}`) into every tracker alert record. **Do the same for flap/pump/virtuals before the refit** —
+right now only pons emits raw features, so only pons is refittable.
 
 1. **pons: wire `top_share` penalty into `score_confirmed`** [🔥 highest ROI, ~zero effort]
    - Data: winner top1_share median 5.6% vs died 62.8% (11x, the cleanest pons separator).
@@ -76,9 +90,17 @@ Each is proven on our own coins, not a paper. Ordered by ROI/effort.
      top10 winners ~72% (a low-top10 gate would kill winners); antiSniperTax 13%/98% = TEMPORAL CONFOUND (skip).
    - Change: `virtuals/scan.py` `score_agent`/gates — weight socials much higher; reward isDevCommitted/verified.
 
-6. **flap tax backstop via GoPlus** [high ROI, low effort]
-   - GoPlus CONFIRMED free+keyless on Robinhood 4663 (WAVE 19) — backstops flap's "tax ? (api unavailable)"
-     when batman.taxed.fun is Cloudflare-rate-limited. `GET api.gopluslabs.io/api/v1/token_security/4663?...`.
+6. ~~**flap tax backstop via GoPlus**~~ — ❌ **KILLED 2026-07-19, do not build.**
+   - Wave 19 confirmed the *endpoint* answers on chain 4663 (and 4663 is in `/supported_chains`), but that is
+     endpoint availability, NOT token coverage. Measured against our own tracker: **16/16 Robinhood tokens
+     returned `code:1 / "OK"` with an EMPTY `result` object** — oldest and newest alike, paced to avoid the
+     4029 rate-limit. GoPlus simply has no rows for flap/pons launchpad tokens.
+   - Lesson (generalise this): "API supports chain X" ≠ "API has data for OUR tokens on chain X". Any future
+     data-source claim must be validated against real addresses from `tracker/data/alerts.jsonl` before it
+     earns a backlog slot. The Tier B data-availability matrix should record COVERAGE %, not just reachability.
+   - The flap tax gate therefore keeps its current 2 sources (batman.taxed.fun → GMGN) and its −10 penalty
+     when neither answers. If a third source is still wanted, evaluate honeypot.is (Base-only today) or an
+     RPC-level `eth_call` simulated buy/sell, which needs no third-party coverage at all.
 
 ### TIER B — prerequisite infra (do before trusting any weight changes)
 7. **Per-scanner data-availability matrix** — CRITICAL. Map each signal → can each scanner compute it today?

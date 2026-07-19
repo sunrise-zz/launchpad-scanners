@@ -134,18 +134,27 @@ def score_agent(r, tier_base, progress):
     momentum and concentration shift it. v1 judgment weights — refit later."""
     s = float(tier_base)
     s += min(max(progress - 70, 0), 30) * 0.4 if tier_base == 40 else 0   # near-grad ramp
-    s += 8 if r.get("isVerified") else 0
-    s += 6 if r.get("isDevCommitted") else 0
+    # Recalibrated 2026-07-19 against a REAL died-control (wave 22): 69 graduated
+    # vs 346 on-curve agents >48h old that never graduated. socials/dev-flags are
+    # set at launch, so unlike holder counts they are NOT age-confounded.
+    s += 10 if r.get("isVerified") else 0        # 6% grad vs 0% died — zero FPs
+    s += 10 if r.get("isDevCommitted") else 0    # 12% grad vs 0% died — zero FPs
     s += 6 if fnum(r, "mindshare") > 0 else 0
     s += 6 if fnum(r, "holderCountPercent24h") >= 10 else 0
     s += 5 if fnum(r, "volume24h") >= 10_000 else 0
     dev = fnum(r, "devHoldingPercentage")
-    t10 = fnum(r, "top10HolderPercentage")
     s += 5 if dev < 10 else (-6 if dev >= 15 else 0)
-    s -= 6 if t10 >= 80 else 0
+    # NO top10 penalty on virtuals: graduated agents sit at ~72% top10 (wave 20),
+    # so concentration here is native to the platform and the old `-6 if t10>=80`
+    # was penalising winners. Deliberately unscored.
+    # Also deliberately unscored: antiSniperTax (13% grad vs 98% died looks like a
+    # huge signal but is a TEMPORAL CONFOUND — it became the default launch config
+    # recently, so it mostly dates a coin). See wave 22.
+    # socials = the dominant separator found on ANY of our platforms: 96% grad vs
+    # 2% died. Treated as a near-gate, not a +2-per-channel bit.
     soc = r.get("socials") or {}
-    if isinstance(soc, dict):
-        s += min(sum(1 for v in soc.values() if v), 3) * 2
+    n_soc = sum(1 for v in soc.values() if v) if isinstance(soc, dict) else 0
+    s += (12 + min(n_soc - 1, 2) * 3) if n_soc else -20
     return alertfmt.clamp(s)
 
 

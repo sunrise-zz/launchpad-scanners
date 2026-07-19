@@ -31,6 +31,7 @@ import argparse
 import datetime as dt
 import html
 import json
+import math
 import os
 import sys
 import time
@@ -449,15 +450,41 @@ def score_confirmed(c, dep_count, soc, paid, r):
     """Heuristic 0-100. Base 50 = the rule itself passed (backtested ~30-40%
     precision); extras shift it. Weights are v1 judgment calls — refit later."""
     s = 50.0
-    s += min(c.rebuyers - 6, 6) * 2                      # conviction beyond the bar
-    s += min(max(c.net_weth - 1.0, 0), 3) * 4            # net ETH beyond the bar
+    # conviction beyond the bar. Log-scaled (wave 21): winners' rebuyers median is
+    # 25.5 and reaches 300+, while the old min(rebuyers-6,6)*2 flatlined at 12 —
+    # a 300-rebuyer coin has to outscore a 12-rebuyer one.
+    if c.rebuyers > 6:
+        s += min(12 * math.log10(c.rebuyers / 6), 20)
+    # net ETH beyond the bar, same reasoning (winner median 6.94Ξ, p75 17.8Ξ;
+    # the old cap saturated at 4Ξ).
+    if c.net_weth > 1.0:
+        s += min(14 * math.log10(c.net_weth / 1.0), 16)
     s += min(c.smart_score, 10)                          # weighted smart money
-    # capital efficiency (research #1): ETH raised PER buy. The strongest
-    # graduation predictor in two studies — real conviction arrives in size, bots
-    # churn many micro-buys. avg buy >= 0.1 ETH is a strong-hand signal.
+    # capital efficiency: ETH raised PER buy — real conviction arrives in size,
+    # bots churn many micro-buys. Tiers recalibrated to OUR measured bands
+    # (waves 21/24): winners 0.021-0.041 (median 0.031, max 0.050), died 0.005.
+    # The old >=0.1 tier was DEAD CODE — 0/22 winners ever reached it.
     if c.n_buys:
         cap_eff = c.buy_weth / c.n_buys
-        s += 8 if cap_eff >= 0.1 else (4 if cap_eff >= 0.03 else 0)
+        if cap_eff >= 0.03:                              # winner median and above
+            s += 8
+        elif cap_eff >= 0.02:                            # winner p25 band
+            s += 5
+        elif cap_eff >= 0.012:                           # winner floor (min 0.013)
+            s += 2
+        else:
+            s -= 5                                       # died territory (median 0.005)
+    # top1_share — the cleanest pons separator found (wave 24): winners median
+    # 5.6% (distributed/organic, only 3/22 above 15%), died median 62.8% (one
+    # whale controls the early buy side). Penalise whale-domination.
+    if c.buy_weth > 0:
+        ts = c.top_share
+        if ts >= 0.50:
+            s -= 15                                      # died-median territory
+        elif ts >= 0.30:
+            s -= 10
+        elif ts >= 0.20:
+            s -= 5
     # Telegram-weighted socials (research #5): TG presence = 8.9x graduation lift,
     # all-three = 17x. Weight TG higher than the raw channel count.
     if soc:
@@ -500,7 +527,8 @@ def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None, 
 
     bs = f"{c.n_buys}/{c.n_sells}" + (f" ({c.n_buys/c.n_sells:.1f}x)" if c.n_sells else "")
     cap = f" · avg {c.buy_weth/c.n_buys:.3f}Ξ/buy" if c.n_buys else ""
-    pros = [f"rebuyers <b>{c.rebuyers}</b> · net <b>{c.net_weth:+.2f}</b>Ξ · buys/sells {bs}{cap}"]
+    top = f" · top1 {c.top_share*100:.0f}%" if c.buy_weth > 0 else ""
+    pros = [f"rebuyers <b>{c.rebuyers}</b> · net <b>{c.net_weth:+.2f}</b>Ξ · buys/sells {bs}{cap}{top}"]
     if c.smart_hits:
         pros.append(f"🧠 smart {len(c.smart_hits)} กระเป๋า (score {c.smart_score})")
     socbits = [b for b, on in (("🐦 X", soc and soc.get("x")), ("🌐 web", soc and soc.get("web")),
@@ -517,6 +545,8 @@ def fmt_confirmed(c, dep_count, args, fire_net=None, ethusd=0, now=0, soc=None, 
         pros.append(gl)
 
     cons = []
+    if c.buy_weth > 0 and c.top_share >= 0.20:
+        cons.append(f"top buyer {c.top_share*100:.0f}% ของ buy volume (whale-dominated)")
     if c.snipers:
         cons.append(f"snipers {c.snipers}/{args.snipers}")
     if dep_count > 1:
@@ -798,7 +828,15 @@ def main():
                          record=dict(platform="pons.family", chain="ROBINHOOD", tier="CONFIRMED",
                                      symbol=c.symbol or c.token[:8], token=c.token, score=sc,
                                      track={"method": "dexscreener", "chainSlug": "robinhood", "address": c.token},
-                                     price0=c.price, liq0=(soc or {}).get("liq_usd"), gmgn=g))
+                                     price0=c.price, liq0=(soc or {}).get("liq_usd"), gmgn=g,
+                                     # launch-time factors, for the score refit (Tier B backtest):
+                                     # scores are opinions, these are the raw measurements.
+                                     f=dict(rebuyers=c.rebuyers, net_weth=round(c.net_weth, 4),
+                                            n_buys=c.n_buys, n_sells=c.n_sells,
+                                            buy_weth=round(c.buy_weth, 4), snipers=c.snipers,
+                                            top_share=round(c.top_share, 4) if c.buy_weth > 0 else None,
+                                            cap_eff=round(c.buy_weth / c.n_buys, 5) if c.n_buys else None,
+                                            smart_score=c.smart_score, dep_count=dc)))
 
     def check_neargrad(now):
         try:

@@ -131,7 +131,8 @@ class Coin:
         return (m1 - m0) / dt if dt > 0 else 0.0
 
 
-def score_coin(c, mcap, replies, ath, koth, twitter, nsfw, vel, grad=False, g=None):
+def score_coin(c, mcap, replies, ath, koth, twitter, nsfw, vel, grad=False, g=None,
+               tg=None, web=None):   # NB: `telegram` is an imported module here — don't shadow it
     """Heuristic 0-100. Base 45 (crossed the bar). Climb quality, community and
     momentum push it; dumping-from-ATH and nsfw pull it down. v1 weights.
 
@@ -147,7 +148,13 @@ def score_coin(c, mcap, replies, ath, koth, twitter, nsfw, vel, grad=False, g=No
     elif ath and mcap < 0.5 * ath:
         s -= 10                                    # dumped >50% from peak
     s += 8 if koth else 0                          # King of the Hill
-    s += 5 if twitter else 0
+    # Socials, recalibrated from OUR grad-vs-died control (waves 20/23, n=66/30):
+    # twitter 77% grad vs 60% DIED = table-stakes noise (the old +5 scored nothing);
+    # telegram 44% vs 13% (3.4x) and website 74% vs 37% (2x) are the real separators.
+    # Same direction on every platform we measured: TG is the winner-social.
+    s += 8 if tg else 0
+    s += 6 if web else 0
+    s += 1 if twitter else 0                       # kept as a faint tiebreak only
     s -= 5 if nsfw else 0
     if g:
         # organic-quality overlay (rates are 0-1). Penalise coordinated supply,
@@ -280,6 +287,7 @@ def main():
         ath = c.get("ath_market_cap") or 0
         koth = bool(c.get("king_of_the_hill_timestamp"))
         tw = c.get("twitter")
+        tg_url, web_url = c.get("telegram"), c.get("website")
         nsfw = bool(c.get("nsfw"))
         vel = co.velocity()
         sym = html.escape(str(c.get("symbol") or mint[:8]))
@@ -293,7 +301,8 @@ def main():
             log_event("skip_bundle", mint=mint, sym=c.get("symbol"),
                       holders=holders_n, mcap=mcap)
             return
-        score = score_coin(co, mcap, replies, ath, koth, tw, nsfw, vel, grad=grad, g=g)
+        score = score_coin(co, mcap, replies, ath, koth, tw, nsfw, vel, grad=grad, g=g,
+                           tg=tg_url, web=web_url)
 
         age_m = (now - co.born) / 60
         pros = [f"💰 mc <b>{human(mcap)}</b> · 📈 +{human(vel)}/min · 📊 {prog:.0f}% to grad · ⏱️ {age_m:.0f}m"]
@@ -304,8 +313,9 @@ def main():
             bits.append(f"ATH {human(ath)}")
         if koth:
             bits.append("👑 King of the Hill")
-        if tw:
-            bits.append("🐦 X")
+        for on, lbl in ((tg_url, "💬 TG"), (web_url, "🌐 web"), (tw, "🐦 X")):
+            if on:
+                bits.append(lbl)
         if bits:
             pros.append(" · ".join(bits))
         if g:
@@ -324,8 +334,11 @@ def main():
             cons.append(f"down {100*(1-mcap/ath):.0f}% from ATH")
         if nsfw:
             cons.append("nsfw")
-        if not tw:
-            cons.append("no X")
+        # NB: not "no X" — 60% of DIED coins have an X link, and 56% of graduates
+        # have no TG, so absence of any single channel is weak. Only a total
+        # absence of socials is worth flagging.
+        if not (tw or tg_url or web_url):
+            cons.append("no socials")
         tier_emoji, tier = ("🚀", "PUMP GRADUATING") if grad else ("🐣", "PUMP EARLY")
         body = alertfmt.compose(score, tier_emoji, tier, f"{sym} {name}".strip(),
                                 "💊 pump.fun", "SOLANA", pros, cons, [],

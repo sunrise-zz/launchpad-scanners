@@ -438,8 +438,19 @@ def main():
 
             # heuristic score: base 45 (crossed the traction bar), extras shift.
             s = 45.0
+            # Recalibrated 2026-07-19 from OUR tracker (wave 20), winners >2x (n=12)
+            # vs losers <+20% (n=5). The old score did NOT separate them (median
+            # 59.5 vs 60.0) and it REWARDED transfer count — which correlates with
+            # LOSING (winners 362 transfers vs losers 427). What actually separates:
+            # recipients 107 vs 82, churn 3.44 vs 3.78, entry mcap $10.2k vs $12.7k.
+            # n is tiny → these are DIRECTIONAL: weights kept small deliberately.
+            # Refit properly once the tracker matures (Tier B backtest).
             s += min(max(len(t.recips) - args.min_recips, 0) / 10, 15)   # traction beyond the bar
-            s += min(t.transfers / 100, 8)
+            # churn = transfers per recipient: high churn = the same wallets cycling
+            # (bot/wash-like), broad distribution = organic. Replaces the old
+            # `+min(transfers/100, 8)` reward outright.
+            churn = t.transfers / max(len(t.recips), 1)
+            s += 3 if churn <= 3.0 else (0 if churn < 3.8 else (-3 if churn < 4.5 else -6))
             s += 10 if d.get("isLowRisk") else 0              # platform FAC check
             hc = (d.get("holdersCount") if d else None) or (g or {}).get("holders")
             if tax_known:   # tax numbers from batman OR GMGN — same gate either way
@@ -448,9 +459,17 @@ def main():
                 s -= 10                                       # tax gate could not run
             s += 6 if (hc or 0) >= 100 else 0
             s -= 8 if (top1 or 0) >= 30 else 0
+            # cheaper entry won: winners came in at $10.2k mcap vs losers $12.7k.
+            try:
+                mc0 = float(d.get("marketCap") or 0)
+            except (TypeError, ValueError):
+                mc0 = 0.0
+            if mc0:
+                s += 4 if mc0 <= 11_000 else (0 if mc0 <= 15_000 else -4)
             score = alertfmt.clamp(s)
 
-            pros = [f"⚡ <b>{len(t.recips)}</b> recipients · {t.transfers} transfers in {age/60:.0f}m"]
+            pros = [f"⚡ <b>{len(t.recips)}</b> recipients · {t.transfers} transfers "
+                    f"({churn:.1f}/wallet) in {age/60:.0f}m"]
             if d:
                 bits = [f"👥 {d.get('holdersCount') or '?'} holders"]
                 if d.get("progress"):
