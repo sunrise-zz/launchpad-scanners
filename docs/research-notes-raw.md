@@ -762,3 +762,61 @@ Remaining open items (not full research gaps, just follow-ups noted above): VOLT
 unreachable (proxy blocks archive.org + site 403s); Clanker/honeypot.is/GoPlus full docs pages 403'd to
 automated fetch (need human/browser check); Virtuals Base AgentFactoryV3/Unicorn exact contract address;
 GoPlus/honeypot.is coverage of Robinhood Chain (4663) unconfirmed. NO decisions made — still source material.
+
+## WAVE 19 — gap-closers via DIRECT PROBE (local, non-headless — closes wave 12/14 403s) [done 07-19]
+
+Ran the API probes the cloud agent couldn't (its headless env got 403'd). Verified live:
+
+- ✅ **GoPlus SUPPORTS Robinhood Chain 4663** (confirmed: /supported_chains lists 44 chains incl 4663 + 8453).
+  token_security/4663 on a real flap token (0x4a38...7777) returned **code 1 OK, 39 fields**: buy_tax 0.02,
+  sell_tax 0.01, is_honeypot 0, cannot_sell_all 0, is_blacklisted 0, is_open_source 1, is_mintable 0,
+  owner 0x0 (renounced), creator 0x051a..c508, holder_count 2977, lp_holder_count 1, is_in_dex 1. **KEYLESS,
+  free (~30/min).** → closes wave 12's biggest open item: full EVM honeypot/tax/blacklist detection is
+  available FREE on BOTH our EVM launchpad chains (Robinhood 4663 + Base 8453).
+- 💡 **BONUS (agent couldn't see this)**: GoPlus is an INDEPENDENT tax/honeypot source for flap → backstops
+  flap's "tax ? (api unavailable)" problem when batman.taxed.fun is Cloudflare-rate-limited. Cross-check:
+  GoPlus buy 2%/sell 1% matched flap's own batman tax on the same token. Add as a Part-1 item.
+- ✅ **honeypot.is does NOT support 4663** ("Invalid chain") — ETH/BSC/Base only. So on Robinhood, GoPlus
+  static analysis is the ONLY option (no live buy-sell sim). On Base we can use BOTH (the disagreement signal).
+- ✅ **Clanker public API works from a normal client** (200): `GET https://www.clanker.world/api/tokens?limit=N`
+  → `{data[], total, tokensDeployed}`. Per-token fields (READY firehose, no on-chain decode needed):
+  contract_address, factory_address, locker_address, type (e.g. `clanker_v4`), pair (USDC/WETH),
+  pool_address, starting_market_cap, warnings[], cast_hash (Farcaster link), requestor_fid, socialLinks,
+  social_context, supply, tx_hash, chain_id, created_at/deployed_at, tags. Live token seen created 04:29 UTC
+  (~minutes old) → high cadence. → closes wave 12 Clanker open item; Clanker scanner = poll this API, no
+  factory-event listening needed for v1.
+- ◐ **Virtuals AgentFactoryV3 address** — `factory` field is NULL in the api2.virtuals.io list response;
+  not exposed via API. Would need a Basescan creation-tx trace of one agent token. MINOR (our virtuals
+  scanner is API-based, doesn't need the on-chain factory). Left open.
+- GoPlus Base 8453 also confirmed code 1 OK (works for Clanker/Zora token security too).
+
+## CRITICAL REVIEW — tensions to reconcile + angles still missing (2026-07-19)
+
+**Apparent CONTRADICTIONS across waves that the synthesis must resolve (not bugs — they resolve to one rule):**
+1. Wave 9 "sniper/bundler = U-curve (some is GOOD)" vs Wave 8 "bundle = rug, defeat stagger" vs Wave 11
+   "sniper-cohort presence = selection bias, NOT causal alpha". RESOLUTION: it's not the COUNT, it's WHO —
+   funder-linked-to-dev bundlers = rug (bad); independent sophisticated bots = quality pre-filter (mild-neutral);
+   and measured raw presence is confounded by organic interest. → the discriminator is the FUNDER-GRAPH
+   (Part 2), which separates dev-coordinated from independent. All three waves point to the same build.
+2. Wave 2/3 "capital-efficiency: fewer trades = GOOD" vs Wave 9 "fast-fill <30min = BAD". RESOLUTION: few
+   LARGE buys from DIVERSE wallets = conviction (good); many fast buys from COORDINATED wallets = cabal (bad).
+   Same discriminator: trade-size + wallet-diversity + funder-graph, not raw speed. → "fast" is only bullish
+   when organic-share is high.
+Both tensions collapse to the meta-finding + funder-graph. Worth stating explicitly in the final synthesis
+so we don't build contradictory gates.
+
+**ANGLES STILL NOT RESEARCHED (candidates for a future wave — genuine gaps, not covered by 1-19):**
+- **Our OWN tracker as the training set** — no wave analyzed what alerts.jsonl+snapshots.jsonl outcomes
+  actually correlate with FOR US (the most direct "what works for our alerts" study; wave 13 gave the METHOD
+  but nobody ran it on our data). Highest-value un-run analysis; needs the shadow-control data first.
+- **Cross-alert wallet-overlap** — do the same smart wallets recur across our recent CONFIRMED/EARLY alerts?
+  A co-occurrence signal computable purely from data we already collect; nobody looked.
+- **Real-time LP-pull alert (EVM)** — wave 12 gave the events (V2 Burn/Sync, V4 ModifyLiquidity negative
+  delta) but no wave developed a live "liquidity being removed RIGHT NOW" exit/danger alert.
+- **Exit / take-profit logic** — all 19 waves are ENTRY-side. Winner post-mortem noted "trailing -30% beat
+  fixed +50% TP by 8.5x P&L" but no wave developed exit annotations (our alerts are detection-only, but an
+  exit-signal overlay would add value; the agent/analyst.py AI-DD is the natural home).
+- **Per-scanner DATA-AVAILABILITY matrix** — critical pre-build gap: which signals can pons/flap/virtuals/
+  arc/pump ACTUALLY compute today? e.g. flap only collects transfer COUNTS (no per-swap value) → capital-
+  efficiency/trade-size-variance/wash-price-impact are NOT computable on flap without new collection. This
+  mapping must exist before committing to any Part-1/2 build.

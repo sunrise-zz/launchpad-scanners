@@ -337,3 +337,39 @@ unified, queryable access that removes most custom indexing.
 - MARKETING net-negative → off. pump bar $35k + quality gate. flap bar 80.
 - Everything = SCORED feature with stage-dependent weight, not a hard gate (brand-
   new pairs are noisy; hard gates over-filter). Winner ≈ 1-in-20k → FP tolerance brutal.
+
+---
+
+## UPDATES — 2026-07-19 gap-closer probes (local, closed the cloud agent's 403s)
+
+Verified live via direct API probe (see research-notes-raw.md WAVE 19). Changes to items above:
+
+- ☑→confirmed: **GoPlus EVM honeypot/tax is FREE + KEYLESS on BOTH our EVM chains** — Robinhood
+  4663 AND Base 8453 (Part 1 "EVM honeypot/tax dual-check" is now high-confidence, not speculative).
+  honeypot.is does NOT support 4663 (Base-only for the dynamic sim) → on Robinhood use GoPlus static only.
+- ☐ **NEW Part-1 item — flap tax backstop via GoPlus**: flap's "tax ? (api unavailable)" gap (batman
+  Cloudflare rate-limit) can be backstopped by GoPlus token_security/4663 (buy_tax/sell_tax/is_honeypot).
+  Cheap, independent, closes a live bug we already hit. High ROI / low effort.
+- ☑→confirmed: **Clanker (Part 5) is a READY API firehose** — www.clanker.world/api/tokens?limit=N returns
+  contract_address/factory_address/locker_address/type/pair/starting_market_cap/warnings/cast_hash(Farcaster)/
+  socialLinks per token, ~minutes-fresh. No factory-event listening needed for v1. Upgrades Clanker from
+  "medium (event decode)" to "easy (poll API)".
+- ◐ Virtuals AgentFactoryV3 on-chain address still not found (factory field null in API) — MINOR, our
+  scanner is API-based.
+
+## NEW PREREQUISITE (blocks most of Part 1/2 — do this FIRST, before building signals)
+
+- ☐ **Per-scanner data-availability matrix**: map every proposed signal → can pons/flap/virtuals/arc/pump
+  compute it with data collected TODAY? Known gap: **flap collects only transfer COUNTS, not per-swap value**
+  → capital-efficiency, trade-size-variance, wash-price-impact are NOT computable on flap without adding
+  swap-value collection. This matrix decides what's a quick win vs what needs a collection change first.
+  Cheap to produce (audit the 5 scanners' CoinState/data structures); saves building signals we can't feed.
+
+## SYNTHESIS NOTE — two apparent contradictions resolve to ONE rule (don't build contradictory gates)
+
+- sniper/bundler U-curve (wave 9) vs bundle=rug (wave 8) vs cohort=selection-bias (wave 11): it's not the
+  COUNT, it's WHO — dev-funder-linked = bad, independent-sophisticated = neutral, raw-presence = confounded.
+- capital-efficiency few-trades=good (wave 2/3) vs fast-fill<30min=bad (wave 9): few LARGE buys from DIVERSE
+  wallets = good; many fast COORDINATED buys = bad.
+- BOTH collapse to: the discriminator is organic-share + the FUNDER-GRAPH (Part 2). State this in any final
+  scoring design so "sniper count" / "fill speed" aren't naively gated in contradictory directions.
