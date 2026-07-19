@@ -13,9 +13,11 @@ until the Tier B refit.
 from __future__ import annotations
 
 import importlib.util
+import json
 import math
 import os
 import sys
+import types
 
 import pytest
 
@@ -49,6 +51,43 @@ def pump():
 @pytest.fixture(scope="session")
 def virtuals():
     return _load("virtuals_scan", "virtuals/scan.py")
+
+
+@pytest.fixture(scope="session")
+def flap():
+    return _load("flap_scan", "flap/scan.py")
+
+
+@pytest.fixture
+def outcomes_mod(tmp_path, monkeypatch):
+    """pons/outcomes.py writing to a throwaway alerts.jsonl.
+
+    record_alert() auto-enriches with a GMGN snapshot via a bare `import gmgn`
+    when the caller passes none, which would put a live API call inside a unit
+    test. setitem on sys.modules stubs that import and — unlike a plain
+    _load under the name "gmgn" — is undone afterwards, so the real module is
+    still there for anything else that imports it.
+    """
+    stub = types.ModuleType("gmgn")
+    stub.chain_addr_for = lambda *a, **kw: (None, None)
+    stub.snapshot = lambda *a, **kw: None
+    monkeypatch.setitem(sys.modules, "gmgn", stub)
+
+    mod = _load("pons_outcomes", "pons/outcomes.py")
+    monkeypatch.setattr(mod, "TRACK_DIR", str(tmp_path))
+    monkeypatch.setattr(mod, "ALERTS", str(tmp_path / "alerts.jsonl"))
+    return mod
+
+
+@pytest.fixture
+def tmp_alerts(outcomes_mod):
+    """Every row written to the throwaway alerts.jsonl, in order."""
+    def _read():
+        if not os.path.exists(outcomes_mod.ALERTS):
+            return []
+        with open(outcomes_mod.ALERTS) as f:
+            return [json.loads(ln) for ln in f if ln.strip()]
+    return _read
 
 
 @pytest.fixture(scope="session")

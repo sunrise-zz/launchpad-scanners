@@ -26,6 +26,30 @@ TRACK_DIR = os.path.join(REPO, "tracker", "data")
 ALERTS = os.path.join(TRACK_DIR, "alerts.jsonl")
 
 
+def num(x):
+    """Coerce a feed value to a number, preserving "not measured" as None.
+
+    This is the deliberate inverse of the coercion every scanner uses for
+    *scoring* — `fnum(r, k)`, `c.get(k) or 0`, `float(x or 0)` — which folds a
+    missing field into 0 so it simply earns no points. Right for a score,
+    wrong for a training row: the refit (#10) cannot tell a fabricated 0 from a
+    measured one, so an absent field logged as 0 drags its coefficient toward
+    zero on data that was never collected.
+
+    None, empty string and unparseable text all mean "not measured". A real 0
+    — zero tax, zero replies, zero dev holdings — survives as 0.
+    """
+    if x is None or x == "":
+        return None
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    if v != v or v in (float("inf"), float("-inf")):   # not measurements
+        return None
+    return int(v) if v.is_integer() else v
+
+
 def record_alert(platform, chain, tier, symbol, token, score, track,
                  price0=None, mcap0=None, liq0=None, gmgn=None, tg=None, features=None):
     """Append one alert row. Best-effort — never raises into the scanner loop.

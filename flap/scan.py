@@ -253,6 +253,46 @@ def gmgn_tax(addr):
     return f"🧾 tax: buy {buy_bps/100:.0f}% / sell {sell_bps/100:.0f}% (GMGN)", buy_bps, sell_bps, True
 
 
+def launch_features(*, recips=None, transfers=None, age_s=None, mcap=None, liq=None,
+                    vol24h=None, feed_holders=None, top1_pot_pct=None, top10_pot_pct=None, buy_bps=None,
+                    sell_bps=None, tax_known=None, low_risk=None, progress=None):
+    """Raw launch-time measurements for one flap alert (#7).
+
+    Mirrors pons/alert_pro.py launch_features: measurements only, never scores,
+    and None means "not measured" — distinct from 0. Every argument is optional
+    because flap's three tiers genuinely see different data:
+
+      EARLY      everything, already computed before the alert — no extra call.
+      NEAR-GRAD  board data only. The coin came off graduatinghot and never
+                 entered `toks`, so recips/transfers/age do not exist for it.
+      SHADOW     on-chain cohort counters only, by design — it makes no API
+                 call, and those counters are exactly the EARLY bar's inputs,
+                 which is what the shadow-control study (#9) compares.
+
+    Omitting a field is the honest record of not having measured it; that is
+    why the defaults are None rather than 0.
+
+    `feed_holders` is batman's count specifically, never the GMGN fallback the
+    scoring path uses — row["gmgn"] already carries GMGN's own `holders`, and
+    a field in here that is sometimes one source and sometimes the other is
+    exactly the ambiguity keeping f and gmgn disjoint is meant to prevent.
+    """
+    recips, transfers = outcomes.num(recips), outcomes.num(transfers)
+    # churn = transfers per recipient: high churn is the same wallets cycling
+    # (bot/wash-like), broad distribution is organic. Derived from two logged
+    # measurements, so the refit can re-derive it or ignore it.
+    churn = round(transfers / recips, 4) if (transfers is not None and recips) else None
+    return dict(
+        recips=recips, transfers=transfers, churn=churn,
+        age_s=outcomes.num(age_s), mcap=outcomes.num(mcap), liq=outcomes.num(liq),
+        vol24h=outcomes.num(vol24h), feed_holders=outcomes.num(feed_holders),
+        top1_pot_pct=outcomes.num(top1_pot_pct), top10_pot_pct=outcomes.num(top10_pot_pct),
+        buy_bps=outcomes.num(buy_bps), sell_bps=outcomes.num(sell_bps),
+        tax_known=tax_known, low_risk=low_risk,
+        progress=outcomes.num(progress),
+    )
+
+
 class Tok:
     __slots__ = ("addr", "birth_block", "birth_ts", "recips", "transfers", "alerted", "shadowed", "dead")
 
@@ -407,7 +447,10 @@ def main():
                 log_event("shadow", addr=t.addr, tier=stier,
                           recips=len(t.recips), transfers=t.transfers)
                 outcomes.record_alert("flap.sh", "ROBINHOOD", stier, str(ssym), t.addr,
-                                      None, {"method": "flap", "address": t.addr})
+                                      None, {"method": "flap", "address": t.addr},
+                                      features=launch_features(
+                                          recips=len(t.recips), transfers=t.transfers,
+                                          age_s=round(age, 2)))
             if not live_ok:
                 continue
             t.alerted = True   # one shot per token, decided before the API round-trip
@@ -518,7 +561,17 @@ def main():
                                  price0=d.get("price") if d else None,
                                  mcap0=d.get("marketCap") if d else None,
                                  liq0=d.get("liquidity") if d else None,
-                                 gmgn=g))
+                                 gmgn=g,
+                                 features=launch_features(
+                                     recips=len(t.recips), transfers=t.transfers,
+                                     age_s=round(age, 2),
+                                     mcap=d.get("marketCap"), liq=d.get("liquidity"),
+                                     vol24h=d.get("volume24h"),
+                                     feed_holders=d.get("holdersCount"),
+                                     top1_pot_pct=top1, top10_pot_pct=top10,
+                                     buy_bps=buy_bps, sell_bps=sell_bps,
+                                     tax_known=tax_known,
+                                     low_risk=bool(d.get("isLowRisk")))))
         for a in expired:
             del toks[a]
 
@@ -573,7 +626,13 @@ def main():
                                  symbol=str(sym), token=addr, score=score,
                                  track={"method": "flap", "address": addr},
                                  mcap0=it.get("marketCap"), liq0=it.get("liquidity"),
-                                 gmgn=g))
+                                 gmgn=g,
+                                 features=launch_features(
+                                     mcap=it.get("marketCap"), liq=it.get("liquidity"),
+                                     vol24h=it.get("volume24h"), feed_holders=it.get("holders"),
+                                     buy_bps=buy_bps, sell_bps=sell_bps, tax_known=True,
+                                     low_risk=bool(it.get("isLowRisk")),
+                                     progress=prog)))
 
     print("running… Ctrl-C to stop", flush=True)
     last_grad = [0.0]

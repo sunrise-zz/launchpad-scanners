@@ -131,6 +131,49 @@ class Coin:
         return (m1 - m0) / dt if dt > 0 else 0.0
 
 
+def launch_features(c, co, now):
+    """Raw launch-time measurements for one pump alert (#7).
+
+    Mirrors pons/alert_pro.py launch_features: measurements only, never scores,
+    and None means "not measured" — distinct from 0. `reply_count: 0` is the
+    commonest value in the feed and means nobody has commented; a row where the
+    feed omitted the field entirely must not read as that same thing.
+
+    Two places where the scoring path's answer would be wrong here:
+
+      age    derived from the feed's created_timestamp on THIS poll, never from
+             `co.born`. born is stamped at first sighting and falls back to
+             `now` when the feed omitted the field then (see poll) — right for
+             the watch window, and a fabricated measurement here. Gating on the
+             feed while measuring from born is worse than either: a coin first
+             seen without a timestamp that later gains one would report the
+             time since we noticed it (minutes) as its age (hours).
+      vel    velocity() returns 0.0 from a single sample, which claims a flat
+             coin. One poll measures no rate of change at all.
+
+    One dict serves EARLY and GRADUATING. The tier itself is not in here — it
+    is already a column on the row, and which bar fired is a decision, not a
+    measurement.
+    """
+    created_ms = outcomes.num(c.get("created_timestamp"))
+    return dict(
+        mcap=outcomes.num(c.get("usd_market_cap")),
+        velocity=round(co.velocity(), 4) if len(co.hist) >= 2 else None,
+        samples=len(co.hist),          # polls the velocity was measured over
+        replies=outcomes.num(c.get("reply_count")),
+        ath=outcomes.num(c.get("ath_market_cap")),
+        koth=bool(c.get("king_of_the_hill_timestamp")),
+        # feed_* rather than has_*: row["gmgn"] carries GMGN's own has_x/has_tg/
+        # has_web, measured independently, and the two disagree in useful ways
+        # (a renamed or deleted account). Distinct names keep both readable if
+        # the refit ever flattens f and gmgn into one vector.
+        feed_has_x=bool(c.get("twitter")), feed_has_tg=bool(c.get("telegram")),
+        feed_has_web=bool(c.get("website")), nsfw=bool(c.get("nsfw")),
+        progress=round(progress(c), 4),
+        age_s=round(now - created_ms / 1000.0, 2) if created_ms else None,
+    )
+
+
 def score_coin(c, mcap, replies, ath, koth, twitter, nsfw, vel, grad=False, g=None,
                tg=None, web=None):   # NB: `telegram` is an imported module here — don't shadow it
     """Heuristic 0-100. Base 45 (crossed the bar). Climb quality, community and
@@ -349,7 +392,8 @@ def main():
                  record=dict(platform="pump.fun", chain="SOLANA", tier=tier,
                              symbol=str(c.get("symbol") or mint[:8]), token=mint, score=score,
                              track={"method": "pumpfun", "address": mint},
-                             mcap0=mcap, gmgn=g))
+                             mcap0=mcap, gmgn=g,
+                             features=launch_features(c, co, now)))
 
     print("running… Ctrl-C to stop", flush=True)
     while True:

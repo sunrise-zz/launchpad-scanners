@@ -129,6 +129,47 @@ def fnum(r, key, default=0.0):
         return default
 
 
+def launch_features(r, now=None, born=None):
+    """Raw launch-time measurements for one virtuals alert (#7).
+
+    Mirrors pons/alert_pro.py launch_features: measurements only, never scores,
+    and None means "not measured" — distinct from 0.
+
+    Deliberately does NOT use fnum(): that defaults to 0.0 so the cohort pass
+    can't crash on one of Strapi's stringified numerics, which would report
+    every agent Strapi declined to describe as having 0% dev holdings and 0
+    holders — the most flattering possible reading of a total absence of data.
+    outcomes.num() keeps the same string coercion but returns None instead.
+
+    `born` is when this scanner first saw the agent, so age is None for the
+    NEAR-GRAD tier, which scans a volume board that includes agents born before
+    the scanner started.
+    """
+    soc = r.get("socials") or {}
+    channels = {k.upper(): v for k, v in soc.items()}
+    return dict(
+        socials_n=sum(1 for v in soc.values() if v),
+        # feed_* rather than has_*: row["gmgn"] carries GMGN's own has_x/has_tg/
+        # has_web, measured independently. Distinct names keep both readable if
+        # the refit ever flattens f and gmgn into one vector.
+        feed_has_x=bool(channels.get("TWITTER")), feed_has_tg=bool(channels.get("TELEGRAM")),
+        feed_has_web=bool(channels.get("WEBSITE")),
+        verified=bool(r.get("isVerified")), dev_committed=bool(r.get("isDevCommitted")),
+        dev_pct=outcomes.num(r.get("devHoldingPercentage")),
+        top10_pct=outcomes.num(r.get("top10HolderPercentage")),
+        feed_holders=outcomes.num(r.get("holderCount")),
+        holders_24h_pct=outcomes.num(r.get("holderCountPercent24h")),
+        vol24h=outcomes.num(r.get("volume24h")),
+        liq=outcomes.num(r.get("liquidityUsd")),
+        mcap_virtual=outcomes.num(r.get("mcapInVirtual")),
+        price_24h_pct=outcomes.num(r.get("priceChangePercent24h")),
+        mindshare=outcomes.num(r.get("mindshare")),
+        tvl=outcomes.num(r.get("totalValueLocked")),
+        progress=round(progress_pct(r), 4),
+        age_s=round(now - born, 2) if (now is not None and born is not None) else None,
+    )
+
+
 def score_agent(r, tier_base, progress):
     """Heuristic 0-100 from the premium list fields. Base per tier; quality,
     momentum and concentration shift it. v1 judgment weights — refit later."""
@@ -314,7 +355,8 @@ def main():
                                  tier="VIRTUALS EARLY", symbol=str(r.get("symbol") or aid),
                                  token=r.get("tokenAddress") or r.get("preToken") or str(aid),
                                  score=score, track=track_of(r),
-                                 mcap0=r.get("mcapInVirtual"), liq0=r.get("liquidityUsd")))
+                                 mcap0=r.get("mcapInVirtual"), liq0=r.get("liquidityUsd"),
+                                 features=launch_features(r, now=now, born=t["born"])))
 
     def check_neargrad(now):
         """Volume board scan: catches curves nearing graduation even if they were
@@ -348,7 +390,8 @@ def main():
                                  tier="VIRTUALS NEAR-GRAD", symbol=str(r.get("symbol") or aid),
                                  token=r.get("tokenAddress") or r.get("preToken") or str(aid),
                                  score=score, track=track_of(r),
-                                 mcap0=r.get("mcapInVirtual"), liq0=r.get("liquidityUsd")))
+                                 mcap0=r.get("mcapInVirtual"), liq0=r.get("liquidityUsd"),
+                                 features=launch_features(r)))
 
     print("running… Ctrl-C to stop", flush=True)
     last = {"BASE": 0.0, "SOLANA": 0.0, "cohort": 0.0, "near": 0.0}
