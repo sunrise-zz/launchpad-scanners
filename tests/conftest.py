@@ -57,10 +57,22 @@ def alertfmt():
 
 
 @pytest.fixture
-def pons_api():
+def load_pons_api():
+    """Build a *new* pons/api.py instance on demand.
+
+    Calling this twice is what a scanner restart looks like from the outside:
+    module globals (the block cursor, the symbol and timestamp caches) are back
+    to their import-time values, and anything that survived did so because it
+    was written to disk. The cursor-persistence tests turn on exactly that.
+    """
+    return lambda: _load("pons_api", "pons/api.py")
+
+
+@pytest.fixture
+def pons_api(load_pons_api):
     """Function-scoped: the discovery tests monkeypatch module state (cursor,
     caches, DISCOVERY_SOURCE), so they must not share one instance."""
-    return _load("pons_api", "pons/api.py")
+    return load_pons_api()
 
 
 @pytest.fixture

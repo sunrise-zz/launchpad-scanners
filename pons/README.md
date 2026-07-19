@@ -36,6 +36,18 @@ and `restrictionsEndBlock` (anti-sniper window — an **L1** block number, since
 this is an Arbitrum Orbit chain, so never compare it to our L2 `blockNumber`).
 `--discovery-source http` switches back if the domain ever returns.
 
+Discovery keeps a block cursor in `data/discovery_cursor.json` so a restart
+resumes where it stopped instead of re-basing at head — the difference between
+a silent coverage gap and none. Each poll reads a bounded slice (5000 blocks;
+the RPC answers 10k in ~1.1s and 413s above that), so an outage drains over
+several polls rather than one oversized query: measured ~2600 blocks/s, ~260x
+realtime, so a 6h gap closes in ~80s. A cold start with no cursor begins at head
+minus the watch window (15 min, matching `alert_pro.ACTIVE_SECS`) — enough to
+catch everything still alert-eligible, without replaying history. A cursor more
+than 12h behind is skipped rather than drained, with the skipped range logged:
+that backlog can no longer alert, and draining a week of it would cost ~38 min
+blind to live launches. `PONS_DISCOVERY_CURSOR` overrides the path.
+
 ## Findings
 
 1. **Launch-time metadata gives only weak lift** (same lesson as vlad):

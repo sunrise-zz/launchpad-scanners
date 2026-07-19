@@ -52,7 +52,11 @@ DATA = os.path.join(HERE, "data")
 BLOCK_SEC = 0.1
 SWAP_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
 WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
-ACTIVE_SECS = 15 * 60
+# One definition, in api.py, because discovery's cold-start lookback is derived
+# from it: a window here that api.py didn't look back over is a launch that is
+# alert-eligible but was never discovered (#4). The import already runs one way
+# — api.py never imports this module — so they can't drift.
+ACTIVE_SECS = api.WATCH_SECS
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
 
 
@@ -389,6 +393,20 @@ class CoinState:
     @property
     def top_share(self):
         return (max(self.buyers.values()) / self.buy_weth) if self.buy_weth > 0 else 1.0
+
+    def is_active(self, now):
+        """Whether this coin is still worth polling swaps for: young enough to
+        alert, or holding a pending confirmation that has to resolve.
+
+        A launch first seen older than ACTIVE_SECS — everything a drained
+        outage backlog surfaces (#4) — is registered but never scanned, so it
+        cannot alert. That makes this the one thing standing between a backlog
+        and firing all of it at once, which is why it is a named method with a
+        test rather than a condition inside update_swaps().
+        """
+        if self.dead or self.confirmed or not self.launched_at:
+            return False
+        return (now - self.launched_at) <= ACTIVE_SECS or self.pending_since is not None
 
 
 def launch_features(c, dep_launches):
@@ -743,9 +761,19 @@ def main():
                 if tok in coins or not L.get("pool") or not L.get("blockNumber"):
                     continue
                 n += 1
-                # #4: a missing/unparseable launchedAt used to leave launched_at=None,
+                # A missing/unparseable launchedAt used to leave launched_at=None,
                 # and the active filter (needs launched_at truthy) then never scanned
                 # the coin — a silent CONFIRMED miss. Fall back to now.
+                #
+                # But "now" is a lie for anything a drain surfaced: it dates an
+                # hours-old launch as new, putting it inside the watch window
+                # where it can alert. The RPC path therefore never returns None
+                # here — api._latest_onchain() estimates from block height when
+                # the timestamp lookup fails (#4). This fallback is now reached
+                # only by the legacy HTTP source, which is dormant (pons.family
+                # is NXDOMAIN) and never drains, so a stale record can't reach
+                # it in bulk. If that source is ever revived, it needs the same
+                # treatment before it can be trusted with an outage backlog.
                 launched_at = parse_ts(L.get("launchedAt")) or time.time()
                 dep = (L.get("deployer") or "").lower()
                 coins[tok] = CoinState(tok, L["pool"], L["blockNumber"],
@@ -764,10 +792,7 @@ def main():
             print(f"  latest error: {e}", flush=True)
 
     def update_swaps(now):
-        active = [c for c in coins.values()
-                  if not c.dead and not c.confirmed and c.launched_at
-                  # keep polling young coins, and any pending coin until its hold resolves
-                  and ((now - c.launched_at) <= ACTIVE_SECS or c.pending_since is not None)]
+        active = [c for c in coins.values() if c.is_active(now)]
         if not active:
             return
         try:

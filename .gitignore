@@ -22,3 +22,4 @@ pons/data/early_swaps.json
 tracker/data/
 pump/data/alerted_mints.txt
 pump/data/.seeded
+pons/data/discovery_cursor.json
