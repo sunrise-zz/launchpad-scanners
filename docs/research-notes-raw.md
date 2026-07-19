@@ -914,3 +914,46 @@ top1_share findings stand regardless of control (they're about the winner distri
 **OPERATIONAL**: pons.family was DOWN this whole analysis (DNS unresolvable, 000) → the LIVE pons scanner is
 also erroring ("recent-buys/latest failed, nodename nor servname"). If persistent, pons alerts are dark until
 the platform's API returns — worth a health-check/alert on the scanner side (it currently just logs and retries).
+
+## WAVE 22 — virtuals winner vs REAL died-control (346 old on-curve coins) [done 07-19]
+
+Upgraded wave 20's virtuals cut with a PROPER died-control: 346 on-curve agents >48h old that NEVER
+graduated (genuinely dead, not just young), vs 69 graduated. Clean separators (socials/dev-flags are set at
+launch → NOT age-confounded):
+- **has socials: 96% grad vs 2% died** — THE dominant separator; near-necessary condition. No socials on
+  virtuals ≈ certain death. → our virtuals score should treat socials as near-GATE, not a +2 bit.
+- **isDevCommitted: 12% vs 0%** — graduated-only launch flag → strong positive.
+- **isVerified: 6% vs 0%** — graduated-only → positive (rare but zero false positives in died set).
+- holderCount 7946 vs 1 — age-confounded (winners accumulate), not a launch-time signal.
+- ⚠️ **antiSniperTax set: 13% grad vs 98% died — LOOKS like a huge signal but is almost certainly a
+  TEMPORAL CONFOUND**: antiSniperTax became the default launch config recently, so the recent low-quality
+  flood (mostly died/not-yet-graduated) all carry it while older graduated coins predate it. Do NOT use as a
+  signal without controlling for launch date. Flagged as a trap.
+- airdropPercent>0: 1% both → no signal.
+
+**ACTIONABLE (virtuals)**: (1) weight socials FAR higher (near-gate — 96%/2% is the strongest single
+separator found on any of our platforms); (2) reward isDevCommitted + isVerified (zero false-positives in
+died set); (3) do NOT gate on top10% (wave 20: winners sit ~72%) and do NOT use antiSniperTax (temporal trap);
+(4) mindshare is null early → not an early signal despite being unique to virtuals.
+
+## WAVE 23 — pump.fun winner vs REAL died-control (old on-curve) [done 07-19]
+
+Upgraded wave 20's pump cut with a proper died-control: 30 coins >24h old, still on-curve (never completed),
+still recently traded (genuinely died, not just young), vs 66 graduated:
+- **has twitter: 77% grad vs 60% died** — WEAK separator (twitter present in 60% of DEAD too = mostly table-
+  stakes). Confirms wave 20: twitter is near-noise on pump. Our pump `score_coin` +5 for twitter is low-value.
+- **has telegram: 44% grad vs 13% died** — clear separator (3.4x).
+- **has website: 74% grad vs 37% died** — clear separator (2x).
+- reply_count 1934 vs 0, ath_mcap $43M vs $7.8k — age/definition-confounded (graduated = older + reached higher).
+- ACTIONABLE (pump): weight TG + website; drop/minimize twitter (60% of DEAD coins have it). Same direction as
+  every platform — TG is the cross-platform winner-social, twitter is table-stakes noise.
+
+── EMPIRICAL SUMMARY (waves 20-23, OUR platforms with real controls):
+- CROSS-PLATFORM: **Telegram presence is the most consistent winner-social; Twitter is table-stakes noise**
+  (present in 60-74% of DIED coins on pump; only socials-PRESENCE-at-all matters on virtuals).
+- virtuals: socials 96%/2% = near-gate; don't gate top10 (winners ~72%); antiSniperTax = temporal trap.
+- pons: CONFIRMED rule = 77% recall on real graduates; cap_eff>=0.1 tier is dead code (winner band 0.02-0.04);
+  top1_share (already in code as top_share) is an unused organic-distribution signal; snipers≈1 always.
+- flap: score doesn't separate win/lose; recipients + LOW churn (transfers/recip) + cheap entry are the real
+  separators, and our score REWARDS transfers (which correlate with LOSING).
+- pump: TG+website separate, twitter doesn't.
