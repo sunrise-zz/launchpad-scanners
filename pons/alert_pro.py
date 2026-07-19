@@ -35,6 +35,7 @@ import json
 import math
 import os
 import sys
+import threading
 import time
 from collections import defaultdict
 
@@ -43,6 +44,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "vlad"))
 import alertfmt  # noqa: E402
 import api  # noqa: E402
+import ethprice  # noqa: E402
 import gmgn  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
@@ -260,7 +262,14 @@ def glance(token, price, paired, pct, launched_at, now, ethusd):
     h = holders(token, now)
     hstr = f" · 👥 {h} holders" if h else ""
     liq = f"{paired:.2f} ETH" if paired else "?"
-    liq_usd = f" ({human_usd(paired*ethusd)})" if (paired and ethusd) else ""
+    # `ethusd` is an ethprice.Price when it came from the provider chain, and a
+    # bare float from older callers. When every provider is down it is the
+    # hardcoded constant, and the USD figure is a guess — say so on the number
+    # itself rather than letting a stale price look live (#5).
+    # Asked before the multiply: `paired*ethusd` is a plain float and has lost
+    # the provenance (see ethprice.Price).
+    mark = " ⚠️est" if getattr(ethusd, "estimated", False) else ""
+    liq_usd = f" ({'~' if mark else ''}{human_usd(paired*ethusd)}{mark})" if (paired and ethusd) else ""
     prog = f"{pct:.0f}% to grad" if pct is not None else "pre-curve"
     return f"💰 mc {mc}{hstr} · 💧 liq {liq}{liq_usd} · ⏱️ {age_str(launched_at, now)} · 📊 {prog}"
 
@@ -732,12 +741,25 @@ def main():
         except Exception:  # noqa: BLE001
             pass
 
-    def eth_usd():
-        try:
-            return api.get(api.EP_MARKET, {"token": WETH}).get("ethUsd") or 1900.0
-        except Exception:  # noqa: BLE001
-            return 1900.0
-    ethusd = [eth_usd()]  # boxed so we can refresh it periodically
+    # Boxed so the periodic refresh can replace it. Startup is synchronous so a
+    # --dry-run prints a real price immediately; the refresh below is not.
+    ethusd = [ethprice.fetch()]
+    print("ETH/USD " + ethusd[0].describe(), flush=True)
+    missing = ethprice.unconfigured()
+    if missing:
+        print(f"  ⚠️ ETH/USD provider(s) unconfigured on this host: {', '.join(missing)}"
+              f" — the chain is down to {len(ethprice.PROVIDERS) - len(missing)} provider(s)", flush=True)
+
+    def refresh_eth():
+        """Off the poll loop, deliberately. The dead pons.family lookup this
+        replaced retried four times with sleeps and stalled discovery and the
+        CONFIRMED path 6.1s every 5 minutes (#5). A provider that hangs must
+        cost us a stale price, never a stalled scanner.
+
+        fetch() is contractually non-raising, so there is no guard here: if it
+        ever did raise, this thread dies with a traceback on stderr and the
+        last good price keeps serving — louder than a silent `except: pass`."""
+        ethusd[0] = ethprice.fetch()
 
     def dispatch(text, label, buttons=None, record=None):
         stamp = time.strftime("%H:%M:%S")
@@ -1000,8 +1022,8 @@ def main():
         try:
             now = time.time()
             if now - last_eth[0] > 300:      # refresh ETH price every 5 min
-                ethusd[0] = eth_usd()
-                last_eth[0] = now
+                last_eth[0] = now            # stamp first: a slow provider must not queue refreshes
+                threading.Thread(target=refresh_eth, daemon=True).start()
             register_launches()
             update_swaps(now)
             check_neargrad(now)

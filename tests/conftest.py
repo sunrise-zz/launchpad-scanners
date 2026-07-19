@@ -57,6 +57,14 @@ def alertfmt():
 
 
 @pytest.fixture
+def ethprice():
+    """Function-scoped: the provider-chain tests pass their own stub providers,
+    and some of them monkeypatch module state (the shipped PROVIDERS list, the
+    gmgn key lookup)."""
+    return _load("pons_ethprice", "pons/ethprice.py")
+
+
+@pytest.fixture
 def load_pons_api():
     """Build a *new* pons/api.py instance on demand.
 
