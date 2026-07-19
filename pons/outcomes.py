@@ -24,6 +24,7 @@ import time
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 TRACK_DIR = os.path.join(REPO, "tracker", "data")
 ALERTS = os.path.join(TRACK_DIR, "alerts.jsonl")
+CONTROLS = os.path.join(TRACK_DIR, "controls.jsonl")
 
 
 def num(x):
@@ -82,18 +83,35 @@ def record_alert(platform, chain, tier, symbol, token, score, track,
         "mcap0": mcap0,
         "liq0": liq0,
     }
+    if tg and tg.get("msg_id"):
+        row["tg"] = tg
+    return _enrich_and_append(ALERTS, row, gmgn, features)
+
+
+def _enrich_and_append(path, row, gmgn, features):
+    """Enrich a row with GMGN + features and append it. Best-effort throughout.
+
+    Shared by record_alert and record_control deliberately: a case and its
+    controls have to be measured with the same instruments, or every
+    GMGN-derived field separates the two groups perfectly and the refit learns
+    "we had smart-money data on it" as a predictor of being alerted. That is
+    circular, and it is the exact failure #9 exists to prevent — so the
+    enrichment lives in one place that neither recorder can drift away from.
+
+    The chain/track/token the GMGN lookup needs are read back off `row`, which
+    already carries all three — passing them alongside it would be the same
+    three values travelling in two forms, free to disagree.
+    """
     if gmgn is None:
         try:
             import gmgn as _gmgn   # sibling module; every scanner has pons/ on sys.path
-            gchain, addr = _gmgn.chain_addr_for(chain, track, token)
+            gchain, addr = _gmgn.chain_addr_for(row["chain"], row["track"], row["token"])
             if gchain:
                 gmgn = _gmgn.snapshot(gchain, addr)
         except Exception:  # noqa: BLE001
             gmgn = None
     if gmgn:
         row["gmgn"] = gmgn
-    if tg and tg.get("msg_id"):
-        row["tg"] = tg
     if features:
         try:
             json.dumps(features)   # one bad field must not cost us the whole row
@@ -102,11 +120,69 @@ def record_alert(platform, chain, tier, symbol, token, score, track,
             pass
     try:
         os.makedirs(TRACK_DIR, exist_ok=True)
-        with open(ALERTS, "a") as f:
+        with open(path, "a") as f:
             f.write(json.dumps(row) + "\n")
     except Exception:  # noqa: BLE001
         pass
     return row
+
+
+def record_control(platform, chain, symbol, token, track, tier="CONTROL",
+                   price0=None, mcap0=None, liq0=None, gmgn=None, features=None):
+    """Append one shadow-control row — a launch we saw and did NOT alert on.
+
+    Same columns as record_alert so tracker/track.py samples it on the same
+    horizon cadence and report.py's baseline()/ret_at() read it unchanged. Two
+    deliberate differences:
+
+      * It lands in controls.jsonl, never alerts.jsonl. Every reader of
+        alerts.jsonl — report.py, agent/daily_brief.py, recent_same_symbol —
+        treats a row there as a coin we alerted on, and none of them can be
+        asked to think otherwise without being changed. The file split makes
+        them correct by construction instead of by vigilance. (Before #9 the
+        flap SHADOW rows *were* in alerts.jsonl, where they inflated the alert
+        count 30%, pooled with real alerts in every per-platform median, and
+        counted toward the relaunch-farm threshold that suppresses live
+        alerts.)
+      * No score and no tg. A control was never scored and never sent; a 0
+        would read as a measurement, and see num() on why that matters.
+
+    `tier` defaults to CONTROL, the uniformly-sampled group that is a true base
+    rate. Pass something else only for a *targeted* control experiment — flap's
+    SHADOW tiers sample coins that already cleared 60 recipients, to ask
+    whether the EARLY bar should come down. Both belong out of the alert
+    population, but only CONTROL rows are a base rate, and report.py's
+    base_rate_controls() is what keeps them from being pooled.
+
+    Best-effort — never raises into a scan loop."""
+    now = time.time()
+    row = {
+        "t": now,
+        "shadow": True,          # survives a row being copied out of its file
+        # Explicit snapshot id. The derived one, "<t>:<token>", truncates to
+        # whole seconds, and a scanner can sample a coin as a control and alert
+        # the same coin in the same tick — flap runs sample_control at the top
+        # of the loop that then alerts. Colliding ids would make the tracker
+        # treat one row's horizons as already sampled, so the control would
+        # silently show the alert's return: the base rate inheriting the
+        # outcome it exists to be measured against.
+        #
+        # Stored rather than derived so the rows migrated out of
+        # alerts.jsonl, which have no id, keep falling back to the computed one
+        # and stay joined to the snapshots already taken for them.
+        "id": f"{now:.0f}:{token}:c",
+        "platform": platform,
+        "chain": chain,
+        "tier": tier,
+        "symbol": symbol,
+        "token": token,
+        "score": None,
+        "track": track,
+        "price0": price0,
+        "mcap0": mcap0,
+        "liq0": liq0,
+    }
+    return _enrich_and_append(CONTROLS, row, gmgn, features)
 
 
 SNAPS = os.path.join(TRACK_DIR, "snapshots.jsonl")

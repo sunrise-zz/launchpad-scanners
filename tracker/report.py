@@ -27,6 +27,7 @@ from collections import defaultdict
 HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 ALERTS = os.path.join(DATA, "alerts.jsonl")
+CONTROLS = os.path.join(DATA, "controls.jsonl")   # shadow controls (#9), never pooled with alerts
 SNAPS = os.path.join(DATA, "snapshots.jsonl")
 VERDICTS = os.path.join(DATA, "agent_verdicts.jsonl")   # agent/analyst.py output
 
@@ -49,7 +50,8 @@ def load(path):
 
 
 def alert_id(a):
-    return f"{a['t']:.0f}:{a.get('token')}"
+    """A row's snapshot id — see tracker/track.py alert_id, which writes them."""
+    return a.get("id") or f"{a['t']:.0f}:{a.get('token')}"
 
 
 def num(x):
@@ -94,6 +96,51 @@ def ret_at(a, snaps, horizon):
     if not cur:
         return None
     return cur / base - 1
+
+
+CONTROL_TIER = "CONTROL"     # the uniformly-sampled control group (#9)
+
+
+def base_rate_controls(rows):
+    """The rows in controls.jsonl that are a base rate.
+
+    That file holds two different experiments and they must not be pooled.
+    #9's CONTROL rows are sampled uniformly from every launch the scanner saw,
+    which is exactly what makes them a base rate. flap's older SHADOW rows are
+    sampled only from coins that already cleared 60 recipients — a deliberately
+    selected population, kept for the separate question of whether the EARLY
+    bar should come down.
+
+    Mixing them would drag the base rate toward the traction end and understate
+    our edge: the same class of selection error #9 exists to remove, pointed
+    the other way."""
+    return [r for r in rows if r.get("tier") == CONTROL_TIER]
+
+
+def median_ret(pairs, horizon):
+    """Median return across pairs at a horizon, or None if nothing computable."""
+    rets = [r for r in (ret_at(a, s, horizon) for a, s in pairs) if r is not None]
+    return statistics.median(rets) if rets else None
+
+
+def lift_at(alerted, controls, horizon):
+    """(alert_median, control_median, lift) at one horizon — the comparison the
+    shadow-control group (#9) exists to make possible.
+
+    A raw return is uninterpretable on its own. "flap EARLY returned -20%"
+    reads as a failure; "-20% against a base rate of -60%" reads as a +40%
+    edge. Same alerts, opposite conclusion, and before controls existed only
+    the first sentence was sayable — every number this report printed was
+    measured against nothing.
+
+    lift is None when there are no controls to compare against, deliberately:
+    reporting the raw return in a column headed "lift" would dress the
+    survivorship-biased reading up as the corrected one."""
+    alert_med = median_ret(alerted, horizon)
+    control_med = median_ret(controls, horizon)
+    if alert_med is None or control_med is None:
+        return alert_med, control_med, None
+    return alert_med, control_med, alert_med - control_med
 
 
 def pct(x):
@@ -209,6 +256,37 @@ def main():
         for vkey in ["BUY-WATCH", "NEUTRAL", "AVOID", "(no DD)"]:
             if vkey in byv:
                 print(summarize(f"  AI {vkey}", byv[vkey], horizons))
+
+    # vs the shadow controls (#9) — the only section here measured against
+    # anything. Everything above is a raw return, which a broad market move
+    # flatters or ruins regardless of whether the alert picked well.
+    controls = []
+    for c in base_rate_controls(load(CONTROLS)):
+        if args.platform and c.get("platform") != args.platform:
+            continue
+        if (now - c["t"]) / 3600 < args.min_age_h:
+            continue
+        controls.append((c, snaps_by_id.get(alert_id(c), [])))
+    if controls:
+        # Its own header: this table's cells are edge / base rate, not the
+        # median / hit-rate / n the one above promises.
+        chead = "  ".join(hlabel.get(h, f"{h}m") + " (edge  base )" for h in horizons)
+        print()
+        print(f"{'EDGE vs CONTROL':<28} {'ctrls':<7} {chead}")
+        print("─" * (36 + len(horizons) * 22))
+        byp_c = defaultdict(list)
+        for c, s in controls:
+            byp_c[c.get("platform", "?")].append((c, s))
+        for p in sorted(byp):
+            cells = []
+            for h in horizons:
+                _, c_med, lift = lift_at(byp[p], byp_c.get(p, []), h)
+                cells.append(f"{pct(lift):>6} {pct(c_med):>6}  " if lift is not None
+                             else f"{'–':>6} {'–':>6}  ")
+            print(f"{'  ' + p:<28} n{len(byp_c.get(p, [])):<6} " + " │ ".join(cells))
+        print("\nEDGE = alerted median − control median, same platform and horizon.")
+        print("A control is a launch we saw and did NOT alert on (tracker/data/controls.jsonl).")
+        print("Negative edge = the filter is picking worse than a random launch from that hour.")
 
     print("\nMetric = median return vs alert-time baseline · hit = share reaching +50%")
     print("If score bands don't separate (🟢 ≈ 🔴), the weights need refitting.\n")

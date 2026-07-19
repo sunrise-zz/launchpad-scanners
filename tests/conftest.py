@@ -76,23 +76,65 @@ def outcomes_mod(tmp_path, monkeypatch):
     mod = _load("pons_outcomes", "pons/outcomes.py")
     monkeypatch.setattr(mod, "TRACK_DIR", str(tmp_path))
     monkeypatch.setattr(mod, "ALERTS", str(tmp_path / "alerts.jsonl"))
+    monkeypatch.setattr(mod, "CONTROLS", str(tmp_path / "controls.jsonl"))
     return mod
+
+
+def _read_jsonl(path):
+    if not os.path.exists(path):
+        return []
+    with open(path) as f:
+        return [json.loads(ln) for ln in f if ln.strip()]
 
 
 @pytest.fixture
 def tmp_alerts(outcomes_mod):
     """Every row written to the throwaway alerts.jsonl, in order."""
-    def _read():
-        if not os.path.exists(outcomes_mod.ALERTS):
-            return []
-        with open(outcomes_mod.ALERTS) as f:
-            return [json.loads(ln) for ln in f if ln.strip()]
-    return _read
+    return lambda: _read_jsonl(outcomes_mod.ALERTS)
+
+
+@pytest.fixture
+def tmp_controls(outcomes_mod):
+    """Every row written to the throwaway controls.jsonl, in order.
+
+    Separate from tmp_alerts on purpose: the whole point of #9's split is that
+    a reader asking for alerts cannot accidentally receive controls, and a test
+    that read both from one fixture could not tell the two apart either.
+    """
+    return lambda: _read_jsonl(outcomes_mod.CONTROLS)
 
 
 @pytest.fixture(scope="session")
 def alertfmt():
     return _load("pons_alertfmt", "pons/alertfmt.py")
+
+
+@pytest.fixture(scope="session")
+def report_mod():
+    return _load("tracker_report", "tracker/report.py")
+
+
+@pytest.fixture(scope="session")
+def migrate_mod():
+    return _load("tracker_migrate_controls", "tracker/migrate_controls.py")
+
+
+@pytest.fixture
+def tracker(tmp_path, monkeypatch):
+    """tracker/track.py with all three data files pointed at a temp dir."""
+    mod = _load("tracker_track", "tracker/track.py")
+    monkeypatch.setattr(mod, "ALERTS", str(tmp_path / "alerts.jsonl"))
+    monkeypatch.setattr(mod, "CONTROLS", str(tmp_path / "controls.jsonl"))
+    monkeypatch.setattr(mod, "SNAPS", str(tmp_path / "snapshots.jsonl"))
+    return mod
+
+
+@pytest.fixture
+def controls_mod():
+    """Function-scoped: the sampler tests each build their own sampler over a
+    throwaway state file, and a shared module instance would let one test's
+    persisted slot leak into the next."""
+    return _load("pons_controls", "pons/controls.py")
 
 
 @pytest.fixture

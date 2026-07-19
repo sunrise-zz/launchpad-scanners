@@ -273,14 +273,20 @@ def main():
                         log_event("burst_shadow", addr=addr, pad=it.get("launchpad"),
                                   sym=it.get("symbol"), holders=h_now,
                                   gain=h_now - pts[0], age_m=round(am_b, 1))
-                        # tracker-only: outcomes decide whether BURST becomes a live tier
-                        outcomes.record_alert(it.get("launchpad") or "trench", "ROBINHOOD",
-                                              "TRENCH BURST", str(it.get("symbol") or addr[:8]),
-                                              addr, None,
-                                              {"method": "gmgn", "chainSlug": "robinhood",
-                                               "address": addr},
-                                              mcap0=it.get("usd_market_cap") or it.get("market_cap"),
-                                              liq0=it.get("liquidity"))
+                        # tracker-only: outcomes decide whether BURST becomes a
+                        # live tier. Goes to controls.jsonl, not alerts.jsonl
+                        # (#9) — it never reached Telegram, so every reader of
+                        # the alert file counting it as an alert was wrong.
+                        # Without this the migration would move the old BURST
+                        # rows out and this line would write new ones straight
+                        # back in.
+                        outcomes.record_control(it.get("launchpad") or "trench", "ROBINHOOD",
+                                                str(it.get("symbol") or addr[:8]), addr,
+                                                {"method": "gmgn", "chainSlug": "robinhood",
+                                                 "address": addr},
+                                                tier="TRENCH BURST",
+                                                mcap0=it.get("usd_market_cap") or it.get("market_cap"),
+                                                liq0=it.get("liquidity"))
 
                 if sec == "new_creation":
                     if addr in seen_new:

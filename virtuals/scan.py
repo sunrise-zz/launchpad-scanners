@@ -46,6 +46,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram sender + alert format
 import alertfmt  # noqa: E402
+import controls  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 
@@ -254,6 +255,9 @@ def main():
     ap.add_argument("--max-dev-pct", type=float, default=30.0)
     ap.add_argument("--max-top10-pct", type=float, default=95.0)
     ap.add_argument("--near", type=float, default=70.0, help="NEAR-GRAD progress %%")
+    # Shadow-control sampling (#9): agents we watched and passed over, tracked
+    # so the alerted ones have a base rate to be measured against.
+    controls.add_args(ap)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -275,6 +279,9 @@ def main():
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 
     tracked = {}      # id -> {"born": ts, "row": latest row, "early": bool}
+    sampler = controls.ControlSampler("virtuals.io", k=args.controls_k,
+                                      bucket_s=args.controls_bucket_s,
+                                      state_path=os.path.join(DATA, "control_slot.json"))
     near_sent = set() # agent ids alerted NEAR-GRAD (once each)
     seeded = [False]  # first createdAt pass registers without alerting backlog
     near_seeded = [False]  # first volume-board pass suppresses near-grad backlog
@@ -318,7 +325,29 @@ def main():
                 if aid in tracked:
                     tracked[aid]["row"] = r
 
+    def sample_control(now):
+        """Take one on-curve agent we have not alerted on as a control (#9).
+
+        Drawn from the same watched cohort EARLY alerts come from, so a control
+        enters the tracker at a comparable point in an agent's life. Agents
+        seeded at startup are excluded: they were marked done rather than
+        evaluated, so we never actually passed on them."""
+        pool = [(aid, t) for aid, t in tracked.items()
+                if not t["early"] and on_curve(t["row"])]
+        picked = sampler.choose(now, pool, key=lambda x: x[0])
+        if picked is None:
+            return
+        aid, t = picked
+        r = t["row"]
+        outcomes.record_control("virtuals.io", (r.get("chain") or "?").upper(),
+                                str(r.get("symbol") or aid),
+                                r.get("tokenAddress") or r.get("preToken") or str(aid),
+                                track_of(r),
+                                mcap0=r.get("mcapInVirtual"), liq0=r.get("liquidityUsd"),
+                                features=launch_features(r, now=now, born=t["born"]))
+
     def check_candidates(now):
+        sample_control(now)
         for aid, t in tracked.items():
             r = t["row"]
             if t["early"] or not on_curve(r):

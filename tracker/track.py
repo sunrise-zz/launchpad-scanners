@@ -6,6 +6,12 @@ of horizons after the alert (5m … 48h), appending each sample to
 tracker/data/snapshots.jsonl. tracker/report.py then turns this into a
 performance summary so the score weights can be refit from real outcomes.
 
+Also reads tracker/data/controls.jsonl — the shadow controls (#9), launches we
+saw and did NOT alert on, sampled K per launchpad per hour. They are measured
+here on exactly the same cadence as alerts, which is what lets report.py ask
+whether an alert beat a random launch from the same window instead of just
+reporting a raw return. See load_tracked() and docs/shadow-control-sampling.md.
+
 Price sources are chosen per alert by its `track` dict:
     dexscreener  -> api.dexscreener.com/tokens/v1/{robinhood|base|solana}/{addr}
     arc          -> web-production-efe27.up.railway.app/token/{addr}
@@ -28,6 +34,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DATA = os.path.join(HERE, "data")
 os.makedirs(DATA, exist_ok=True)
 ALERTS = os.path.join(DATA, "alerts.jsonl")
+CONTROLS = os.path.join(DATA, "controls.jsonl")   # shadow controls (#9) — see load_tracked()
 SNAPS = os.path.join(DATA, "snapshots.jsonl")
 
 # sample offsets after the alert, in minutes
@@ -135,14 +142,20 @@ def take_snapshot(track):
 
 
 def alert_id(a):
-    return f"{a['t']:.0f}:{a.get('token')}"
+    """A row's snapshot id. Controls carry an explicit one (see
+    outcomes.record_control) because the derived form truncates to whole
+    seconds and a coin can be sampled as a control and alerted in the same
+    tick; rows without one — every alert, and the controls migrated out of
+    alerts.jsonl — keep the original derived scheme and their existing
+    snapshots."""
+    return a.get("id") or f"{a['t']:.0f}:{a.get('token')}"
 
 
-def load_alerts():
+def load_rows(path):
     out = []
-    if not os.path.exists(ALERTS):
+    if not os.path.exists(path):
         return out
-    for line in open(ALERTS):
+    for line in open(path):
         line = line.strip()
         if not line:
             continue
@@ -151,6 +164,29 @@ def load_alerts():
         except Exception:  # noqa: BLE001
             pass
     return out
+
+
+def load_alerts():
+    return load_rows(ALERTS)
+
+
+def load_tracked():
+    """Every row that needs an outcome: alerts plus shadow controls (#9).
+
+    This daemon is the one reader that deliberately wants both populations —
+    a control with no return series is just a logged address, and it has to be
+    measured on the same horizons as the alerts it will be compared against or
+    it is measuring a different thing.
+
+    Everyone else — report.py, agent/daily_brief.py, outcomes.recent_same_symbol
+    — wants alerts only, and gets that by reading alerts.jsonl and simply not
+    knowing this file exists. That is why controls live in their own file
+    rather than behind a flag in alerts.jsonl: the readers that must not see
+    them cannot see them, instead of each having to remember to filter.
+
+    Both share one id scheme, so snapshots.jsonl needs no notion of which file
+    a row came from."""
+    return load_alerts() + load_rows(CONTROLS)
 
 
 def load_done():
@@ -174,7 +210,7 @@ def append_snap(row):
 
 def cycle():
     now = time.time()
-    alerts = load_alerts()
+    alerts = load_tracked()
     done = load_done()
     cache = {}   # track-key -> snapshot this cycle (dedupe multi-horizon-due coins)
     due = 0
@@ -218,12 +254,13 @@ def cycle():
 
 def main():
     print(f"outcome tracker  horizons={HORIZONS}min  alerts={ALERTS}", flush=True)
+    print(f"                 + shadow controls  {CONTROLS}", flush=True)
     print("running… Ctrl-C to stop", flush=True)
     while True:
         try:
             n, due = cycle()
             if due:
-                print(f"[{time.strftime('%H:%M:%S')}] {n} alerts tracked · {due} snapshots taken", flush=True)
+                print(f"[{time.strftime('%H:%M:%S')}] {n} rows tracked · {due} snapshots taken", flush=True)
             time.sleep(60)
         except KeyboardInterrupt:
             print("\nstopped", flush=True)

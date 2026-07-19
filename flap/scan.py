@@ -47,6 +47,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "vlad"))   # rpc (QuickNode Robinhood)
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram sender
 import alertfmt  # noqa: E402
+import controls  # noqa: E402
 import gmgn  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
@@ -335,6 +336,9 @@ def main():
     # the live bar drops. 0 = off.
     ap.add_argument("--shadow-min-recips", type=int, default=60,
                     help="silently track coins crossing this recips bar (bar research; 0=off)")
+    # Shadow-control sampling (#9) — the base rate the SHADOW rows above cannot
+    # provide, because they only ever sample coins that already showed traction.
+    controls.add_args(ap)
     ap.add_argument("--near", type=float, default=70.0,
                     help="graduatinghot progress %% for NEAR-GRAD alerts")
     ap.add_argument("--dry-run", action="store_true")
@@ -359,6 +363,9 @@ def main():
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 
     toks = {}            # addr -> Tok
+    sampler = controls.ControlSampler("flap.sh", k=args.controls_k,
+                                      bucket_s=args.controls_bucket_s,
+                                      state_path=os.path.join(DATA, "control_slot.json"))
     # near-grad dedup is PERSISTED: the graduatinghot board holds the same ~20
     # coins for hours, so a memory-only set re-alerts every one of them after
     # every restart (OIL CAT went out 5x on 2026-07-18's deploy day).
@@ -421,8 +428,38 @@ def main():
                             t.recips.add(recip)
         cursor[0] = head
 
+    def sample_control(now):
+        """Take one launch we have NOT alerted on as a control (#9).
+
+        Sampled from the coins currently under watch, rather than at the mint
+        event or at expiry, because that is the population an EARLY alert is
+        drawn from too: a control then enters the tracker at a comparable point
+        in a coin's life, and its return series covers the same window the bar
+        is judged over. Sampling at the mint would baseline every control at
+        age 0 against alerts that fire minutes in; sampling at expiry would
+        baseline them all at 15 minutes, after the move an alert would have
+        caught.
+
+        A sampled coin can still cross the bar later and alert (~1% of flap
+        launches ever do), which leaves one token in both populations. That is
+        recorded rather than prevented — see docs/shadow-control-sampling.md."""
+        pool = [t for t in toks.values() if not t.alerted and not t.dead
+                and (now - t.birth_ts) <= args.watch_secs]
+        t = sampler.choose(now, pool, key=lambda x: x.addr)
+        if t is None:
+            return
+        age = now - t.birth_ts
+        sym = token_symbol(t.addr) or t.addr[:8]
+        log_event("control", addr=t.addr, recips=len(t.recips), transfers=t.transfers)
+        outcomes.record_control("flap.sh", "ROBINHOOD", str(sym), t.addr,
+                                {"method": "flap", "address": t.addr},
+                                features=launch_features(
+                                    recips=len(t.recips), transfers=t.transfers,
+                                    age_s=round(age, 2)))
+
     def check_candidates(now):
         expired = []
+        sample_control(now)
         for t in toks.values():
             if t.alerted or t.dead:
                 # prune finished tokens ~1h after birth: at flap's ~8k launches/day
@@ -446,11 +483,16 @@ def main():
                 ssym = token_symbol(t.addr) or t.addr[:8]
                 log_event("shadow", addr=t.addr, tier=stier,
                           recips=len(t.recips), transfers=t.transfers)
-                outcomes.record_alert("flap.sh", "ROBINHOOD", stier, str(ssym), t.addr,
-                                      None, {"method": "flap", "address": t.addr},
-                                      features=launch_features(
-                                          recips=len(t.recips), transfers=t.transfers,
-                                          age_s=round(age, 2)))
+                # controls.jsonl, not alerts.jsonl (#9). These rows were never
+                # sent to Telegram, but living in the alert file made every
+                # reader count them as alerts — and, via recent_same_symbol,
+                # let a never-sent row push a name over the relaunch-farm
+                # threshold and suppress a real alert.
+                outcomes.record_control("flap.sh", "ROBINHOOD", str(ssym), t.addr,
+                                        {"method": "flap", "address": t.addr}, tier=stier,
+                                        features=launch_features(
+                                            recips=len(t.recips), transfers=t.transfers,
+                                            age_s=round(age, 2)))
             if not live_ok:
                 continue
             t.alerted = True   # one shot per token, decided before the API round-trip

@@ -44,6 +44,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "..", "vlad"))
 import alertfmt  # noqa: E402
 import api  # noqa: E402
+import controls  # noqa: E402
 import ethprice  # noqa: E402
 import gmgn  # noqa: E402
 import outcomes  # noqa: E402
@@ -699,6 +700,9 @@ def main():
     ap.add_argument("--discovery-source", choices=("rpc", "http"),
                     default=api.DISCOVERY_SOURCE,
                     help="where new launches come from (default: rpc / TokenLaunched events)")
+    # Shadow-control sampling (#9): launches we evaluated and never confirmed,
+    # tracked so the alerted ones have a base rate to be measured against.
+    controls.add_args(ap)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
     api.DISCOVERY_SOURCE = args.discovery_source
@@ -722,6 +726,9 @@ def main():
 
     coins = {}          # token -> CoinState
     near_sent = {}      # token -> ts
+    sampler = controls.ControlSampler("pons.family", k=args.controls_k,
+                                      bucket_s=args.controls_bucket_s,
+                                      state_path=os.path.join(DATA, "control_slot.json"))
     prog_hist = defaultdict(list)  # token -> [(t, paired)]
 
     # CONFIRMED dedup persisted across restarts: a restart within a coin's
@@ -813,10 +820,35 @@ def main():
         except Exception as e:  # noqa: BLE001
             print(f"  latest error: {e}", flush=True)
 
+    def sample_control(now, active):
+        """Take one active launch we have not confirmed as a control (#9).
+
+        Since #3 pons discovers launches on-chain, so `coins` holds every
+        launch on the pad, alerted or not — which is why the issue calls pons
+        the cleanest source of controls we have. The pool is the coins under
+        active evaluation, matching where a CONFIRMED alert is decided, and the
+        features are the same CoinState measurements the rule reads."""
+        # near_sent as well as conf_sent: a coin that already went out as
+        # NEAR-GRAD was alerted on, so sampling it as a launch we did NOT alert
+        # on would put one coin in both arms. That tier is default-off today,
+        # which is exactly why the omission would go unnoticed until it wasn't.
+        pool = [c for c in active if not c.confirmed and c.token not in conf_sent
+                and c.token not in near_sent]
+        c = sampler.choose(now, pool, key=lambda x: x.token)
+        if c is None:
+            return
+        outcomes.record_control("pons.family", "ROBINHOOD",
+                                str(c.symbol or c.token[:8]), c.token,
+                                {"method": "dexscreener", "chainSlug": "robinhood",
+                                 "address": c.token},
+                                price0=c.price,
+                                features=launch_features(c, dep_count(c.deployer)))
+
     def update_swaps(now):
         active = [c for c in coins.values() if c.is_active(now)]
         if not active:
             return
+        sample_control(now, active)
         try:
             head = int(rpc("eth_blockNumber", []), 16)
         except Exception as e:  # noqa: BLE001

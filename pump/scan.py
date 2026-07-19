@@ -45,6 +45,7 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram + alertfmt + outcomes
 import alertfmt  # noqa: E402
+import controls  # noqa: E402
 import gmgn  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
@@ -228,6 +229,9 @@ def main():
     ap.add_argument("--min-holders", type=int, default=20,
                     help="skip alerts when GMGN holder count is below this (bundled launches)")
     ap.add_argument("--include-nsfw", action="store_true", default=False)
+    # Shadow-control sampling (#9): coins the gates passed over, tracked so the
+    # alerted ones have a base rate to be measured against.
+    controls.add_args(ap)
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
 
@@ -248,6 +252,9 @@ def main():
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 
     coins = {}          # mint -> Coin (in-memory, for velocity)
+    sampler = controls.ControlSampler("pump.fun", k=args.controls_k,
+                                      bucket_s=args.controls_bucket_s,
+                                      state_path=os.path.join(DATA, "control_slot.json"))
     # persistent dedupe: a mint we've alerted stays suppressed across restarts and
     # across prune→re-add churn (the feed is sorted by last_trade, so an old coin
     # still being traded keeps reappearing — without this it re-alerted every poll).
@@ -266,12 +273,33 @@ def main():
         except Exception:  # noqa: BLE001
             pass
 
+    def sample_control(now, unalerted):
+        """Take one coin we saw and did not alert on as a control (#9).
+
+        The feed is already the population every pump alert is drawn from, so
+        the coins that fell through the gates this poll are exactly the right
+        comparison group — same window, same feed, same market conditions.
+
+        Silent during the first-ever run: the backlog is marked alerted rather
+        than evaluated, so nothing in it was genuinely passed over."""
+        if first_run:
+            return
+        picked = sampler.choose(now, unalerted, key=lambda x: x[0]["mint"])
+        if picked is None:
+            return
+        c, co, mcap = picked
+        outcomes.record_control("pump.fun", "SOLANA",
+                                str(c.get("symbol") or c["mint"][:8]), c["mint"],
+                                {"method": "pumpfun", "address": c["mint"]},
+                                mcap0=mcap, features=launch_features(c, co, now))
+
     def poll(now):
         nonlocal first_run
         nsfw = "true" if args.include_nsfw else "false"
         feed = api_get(f"coins?offset=0&limit=100&sort=last_trade_timestamp&order=DESC&includeNsfw={nsfw}")
         if feed is None:
             return
+        unalerted = []       # this poll's control population (#9)
         for c in feed:
             mint = c.get("mint")
             if not mint:
@@ -313,6 +341,12 @@ def main():
                     and mcap >= args.min_mcap and co.velocity() > 0 and healthy):
                 mark_alerted(mint)
                 emit(dispatch, now, co, c, mcap, grad=False)
+                continue
+
+            # fell through every gate: a launch we saw and did not alert on
+            unalerted.append((c, co, mcap))
+
+        sample_control(now, unalerted)
 
         if first_run:
             try:
