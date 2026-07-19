@@ -868,3 +868,49 @@ token's early on-chain state (a real analysis to run). smart_wallets: a few wall
 Caveat: cross-sectional grad-vs-dead is age-confounded for count metrics (holders/replies/transfers); the
 socials-presence + churn-ratio + entry-mcap findings are the launch-time-valid ones. Re-run on matured
 tracker data (24-48h+) for the flap winner/loser cut as n grows beyond 12/5.
+
+## WAVE 21 — pons WINNER DNA: reconstructed early-trading of 22 graduated coins [done 07-19]
+
+Reconstructed the FIRST-5-MIN on-chain trading of 22 of 94 graduated pons coins (Jul 13-16) directly from
+QuickNode RPC + Blockscout (pons.family API was DOWN — DNS 000, also broke the live pons scanner). For each:
+pool = largest contract holder (Blockscout), launch block = token creation tx, then Uniswap-V3 Swap logs for
+first 3000 blocks (~5min), computing the SAME factors our CoinState does. This is REAL winner data, not a paper.
+
+**WINNER FINGERPRINT (first 5 min, n=22, median [p25–p75]):**
+- buyers:      165 [53–295]      (unique buying wallets)
+- rebuyers:    25.5 [9.75–88]    (bought 2+ times) — our bar is ≥6; winners cluster WAY above
+- n_buys:      221 [68–445] ; n_sells: 97.5 [31–361]
+- net_weth:    6.94Ξ [1.63–17.8] — our bar is ≥1.0; winners median ~7×
+- snipers:     1 [1–1]           — ALMOST ALWAYS EXACTLY 1 (the dev's block-0 buy)
+- **cap_eff:   0.031Ξ/buy [0.021–0.041]** — remarkably TIGHT winner band (min 0.013, max 0.050)
+- **top1_share: 5.6% [median], max 26.7%** — top buyer's share of buy volume; winners are DISTRIBUTED
+
+**RECALL vs our CONFIRMED rule (rebuyers≥6 & net≥1.0 & snipers≤3):**
+- current 6/1.0/≤3 → **77% recall** (17/22). Raising to 8/1.5 → 73%; 10/2.0 → 68%. Lowering net to 0.5 → still
+  77% (net isn't the binding constraint). ⇒ current thresholds are well-placed for RECALL; can't judge
+  precision without a non-winner control (the 5 misses are slow-burns: rebuyers 0-3, net 0.15-0.28 in 5min but
+  graduated later — the deliberate "keep net at 1.0 for slow-builds" tradeoff is real, confirmed here).
+
+**⚠️ CONCRETE MISCALIBRATIONS FOUND (fix these — real-data-backed):**
+1. **cap_eff ≥ 0.1 tier is DEAD CODE**: `score_confirmed` gives +8 if cap_eff≥0.1, but **0/22 winners reach
+   0.1** (max winner = 0.050). The +8 tier NEVER fires for a real winner. Recalibrate to the actual winner
+   band: +good at ≥0.03 (median), +extra at ≥0.045 (p75, only 3/22). Current ≥0.03 tier (+4) is fine; kill/
+   lower the ≥0.1 tier.
+2. **NEW signal — top1_share** (top buyer's % of early buy volume): winners median 5.6%, only 3/22 >15%. A
+   single wallet dominating early buys (>15-20%) is rare in winners = penalize it. We DON'T compute this today
+   (we have c.buyers dict → trivial: max(buyers.values())/buy_weth, already exists as CoinState.top_share!).
+   → wire the existing `top_share` property into score_confirmed as a penalty above ~15%.
+3. **snipers as near-constant 1**: winners are almost always exactly 1 sniper (dev). 0 snipers (2/22) or ≥5
+   (2/22) both graduated but are the tails — snipers≤3 gate is well-placed; the U-curve (wave 9) is mild here.
+4. Winner rebuyers/net cluster far above the floor (median 25 rebuyers / 7Ξ net) — so the SCORE (not the gate)
+   should keep rewarding beyond-bar conviction generously; our `min(rebuyers-6,6)*2` caps at rebuyers=12 but
+   winners go to 300+ — raise/log-scale the cap so a 300-rebuyer coin scores higher than a 12-rebuyer one.
+
+**Caveat**: this is the WINNER distribution only (no matched non-graduated control — pons.family down blocked
+enumerating died coins). Recall is measurable (77%); precision/optimal-threshold needs the control set (rerun
+when pons.family is back, or enumerate died coins on-chain from Jul 13-16 mint events). cap_eff-dead-tier and
+top1_share findings stand regardless of control (they're about the winner distribution vs our score tiers).
+
+**OPERATIONAL**: pons.family was DOWN this whole analysis (DNS unresolvable, 000) → the LIVE pons scanner is
+also erroring ("recent-buys/latest failed, nodename nor servname"). If persistent, pons alerts are dark until
+the platform's API returns — worth a health-check/alert on the scanner side (it currently just logs and retries).
