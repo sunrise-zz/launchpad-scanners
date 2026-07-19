@@ -820,3 +820,51 @@ so we don't build contradictory gates.
   arc/pump ACTUALLY compute today? e.g. flap only collects transfer COUNTS (no per-swap value) → capital-
   efficiency/trade-size-variance/wash-price-impact are NOT computable on flap without new collection. This
   mapping must exist before committing to any Part-1/2 build.
+
+## WAVE 20 — EMPIRICAL analysis of OUR OWN platforms (the wave that was missing) [done 07-19]
+
+All prior 19 waves were EXTERNAL (papers/tools/other platforms). This one pulls REAL coins from our own
+platforms + our tracker and finds PLATFORM-SPECIFIC patterns that generic thresholds get wrong. Samples are
+small/cross-sectional (current-state not launch-time) → directional, validate as data grows. But several
+findings directly contradict what we currently do.
+
+**VIRTUALS (Base) — graduated (n=55) vs on-curve recent (n=100):**
+- has socials: **96% grad vs 2% dead** = the strongest separator on virtuals.
+- **top10%: 72.6% grad vs 100% dead** ⇒ ⚠️ graduated virtuals coins are NATURALLY concentrated (~72% top10).
+  A generic "top10 < 30%" gate (GMGN default) would KILL virtuals winners. PLATFORM-SPECIFIC threshold needed.
+- holderCount 7946 vs 1; isDevCommitted 13% vs 0%; isVerified 4% vs 0%; mindshare mostly null (not populated
+  early → not usable as an early signal on virtuals).
+
+**PUMP.FUN — graduated (n=66) vs young on-curve (n=70):**
+- **has twitter: 76% grad vs 74% young = NO separation!** Twitter is table-stakes on pump.fun (everyone links
+  one) ⇒ ⚠️ our pump `score_coin` gives +5 for twitter — that's scoring NOISE. Drop it.
+- **has telegram 44% vs 3%, has website 76% vs 11% = STRONG separators.** On pump, weight TG + website, NOT
+  twitter. (reply_count 1934 vs 0 but that's cumulative/age-confounded.)
+
+**FLAP (Robinhood) — our tracker, EARLY winners(>2x, n=12) vs losers(<+20%, n=5):**
+- ⚠️⚠️ **our score does NOT separate them: winner median score 59.5 vs loser 60.0.** The hand-weighted flap
+  score is not predictive at the win/lose cut. (This is exactly why wave-13 WOE-calibration matters.)
+- What ACTUALLY separates (the score ignores this):
+  · **recipients: winners 107 vs losers 82** — broader holder distribution = winner.
+  · **transfers: winners 362 vs losers 427** — losers have MORE transfers.
+  · **churn (transfers/recipient): winners 3.44 vs losers 3.78** — losers churn more per wallet (bot/wash-like).
+  · **entry mcap0: winners $10.2k vs losers $12.7k**, liq0 $5.9k vs $7.0k — winners entered CHEAPER.
+- ⚠️ **flap score currently REWARDS transfer count** (`min(transfers/100, 8)`) — but transfers correlate with
+  LOSING. We reward the wrong variable. Fix: reward RECIPIENT count + PENALISE high transfers-per-recipient
+  (churn); this is the organic-share meta-finding confirmed on our own data. Highest-ROI recalibration found.
+
+**PONS (Robinhood) — committed data:** graduations.json stores only {token, graduatedAt, block} — NO launch-
+time features → can't do a rich winner-fingerprint from committed data; would need to pull each graduated
+token's early on-chain state (a real analysis to run). smart_wallets: a few wallets have 41/39/26 graduations
+(the highest-signal wallets — weight these heaviest). 90 deployers with ≥1 grad; max 3.
+
+**ACTIONABLE (platform-specific, from OUR data — override generic thresholds):**
+1. flap: reward recipients + penalise churn (transfers/recip); STOP rewarding raw transfers. [highest ROI]
+2. pump: drop twitter from score (noise); weight TG + website. [free, immediate]
+3. virtuals: do NOT apply a low-top10% gate (winners sit ~72%); use socials-presence as the primary filter.
+4. weight the 41/39/26-graduation smart wallets far above one-hit wallets in the pons smart list.
+5. RUN the wave-13 backtest on our own tracker + a shadow-control pull — this empirical cut proves the score
+   needs refitting, not tweaking. This is the un-run analysis of highest value.
+Caveat: cross-sectional grad-vs-dead is age-confounded for count metrics (holders/replies/transfers); the
+socials-presence + churn-ratio + entry-mcap findings are the launch-time-valid ones. Re-run on matured
+tracker data (24-48h+) for the flap winner/loser cut as n grows beyond 12/5.
