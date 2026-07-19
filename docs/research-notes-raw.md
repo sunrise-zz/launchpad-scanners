@@ -957,3 +957,44 @@ still recently traded (genuinely died, not just young), vs 66 graduated:
 - flap: score doesn't separate win/lose; recipients + LOW churn (transfers/recip) + cheap entry are the real
   separators, and our score REWARDS transfers (which correlate with LOSING).
 - pump: TG+website separate, twitter doesn't.
+
+## WAVE 24 — pons WINNER vs DIED control: precision + the killer signal [done 07-19]
+
+Enumerated 429 non-flap token mints in a 30-min window in the graduation era (block 9.5M), reconstructed
+first-5-min factors for the ones with a pool that DIED (not in the 94-graduated list). n=9 active-died
+controls (most of 429 had no pool/no swaps = not pons-launchpad tokens). Small n, but separation is stark:
+
+**WINNER (n=22) vs DIED (n=9), first-5-min medians:**
+| factor        | winner | died  | separation |
+|---------------|--------|-------|------------|
+| buyers        | 165    | 5     | 33x        |
+| rebuyers      | 25.5   | 0     | ∞          |
+| net_weth      | 6.94Ξ  | 0.088Ξ| 79x        |
+| cap_eff       | 0.031  | 0.005 | 6x         |
+| **top1_share**| **5.6%**| **62.8%** | **11x — CLEANEST** |
+| snipers       | 1      | 3     | (died higher) |
+
+**FALSE-POSITIVE RATE: 1/9 = 11%** of active-died coins pass CONFIRMED (rebuyers≥6 & net≥1.0 & snipers≤3).
+Combined with 77% recall (wave 21): rough precision at ~1% base rate ≈ 6-7% (lower than the docstring's ~30%,
+but n=9 control is tiny + biased to active-died; treat FP rate as directional). The net message: the rule has
+good RECALL but the FALSE POSITIVES are what the SCORE must down-rank — and the data shows exactly how.
+
+**🔑 THE KILLER SIGNAL — top1_share (single wallet's % of early buy volume):**
+- winner median **5.6%** (distributed, organic) vs died median **62.8%** (one whale controls the buy side).
+- 11x separation — the cleanest single discriminator found for pons, and it's WHALE-DOMINATION, the
+  organic-share meta-finding made concrete on our own data.
+- **ALREADY IN THE CODE, UNUSED**: `CoinState.top_share` = max(buyers.values())/buy_weth is computed and
+  never fed into score_confirmed. Wiring it in (penalise top1_share > ~15-20%) is the single highest-value,
+  lowest-effort pons scoring change identified in this entire research effort — real data, zero new infra,
+  property already exists.
+- cap_eff confirms as a strong separator too (winner 0.031 vs died 0.005 = 6x) → recalibrate tiers to the
+  0.005-vs-0.03 gap (threshold ~0.015-0.02), and DELETE the ≥0.1 tier (dead: 0/22 winners reach it).
+
+── EMPIRICAL DEEP-DIVE COMPLETE (waves 20-24). Top platform-specific scoring fixes, all real-data-backed:
+1. pons: WIRE top_share penalty (>15-20%) — killer signal, already in code. [highest ROI, ~zero effort]
+2. pons: fix cap_eff tiers (kill ≥0.1 dead tier; threshold ~0.02; winner band 0.02-0.04).
+3. flap: reward recipients + penalise churn (transfers/recip); STOP rewarding raw transfers.
+4. pump: weight TG+website, drop twitter (60% of DIED coins have twitter = noise).
+5. virtuals: socials near-gate (96%/2%); don't gate top10 (winners ~72%); ignore antiSniperTax (confound).
+Caveats: pons control n=9 (rerun larger when pons.family back); virtuals/pump count-metrics age-confounded
+(socials/top1_share/churn/cap_eff are the launch-time-valid, non-confounded ones and they're the strongest).
