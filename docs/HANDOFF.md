@@ -95,6 +95,10 @@ right now only pons emits raw features, so only pons is refittable.
      endpoint availability, NOT token coverage. Measured against our own tracker: **16/16 Robinhood tokens
      returned `code:1 / "OK"` with an EMPTY `result` object** — oldest and newest alike, paced to avoid the
      4029 rate-limit. GoPlus simply has no rows for flap/pons launchpad tokens.
+   - Reconciling with wave 19's one positive probe (39 fields on one flap token): that token had
+     holder_count 2977 — a large, already-graduated coin. GoPlus indexes tokens once they are big/old,
+     which is exactly useless at alert time (our coins are minutes old when we need the check). Not a
+     contradiction — a coverage profile that excludes our use case.
    - Lesson (generalise this): "API supports chain X" ≠ "API has data for OUR tokens on chain X". Any future
      data-source claim must be validated against real addresses from `tracker/data/alerts.jsonl` before it
      earns a backlog slot. The Tier B data-availability matrix should record COVERAGE %, not just reachability.
