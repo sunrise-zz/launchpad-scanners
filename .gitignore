@@ -7,6 +7,8 @@ pons/data/telegram.json
 *.pid
 __pycache__/
 *.pyc
+.pytest_cache/
+.venv/
 
 # large raw datasets (regenerate with the collect scripts)
 vlad/data/events.json

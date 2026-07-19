@@ -112,6 +112,23 @@ python3 pons/alert_pro.py --test   # verify credentials
 nohup python3 -u pons/alert_pro.py > pons/data/pons_pro.log 2>&1 &   # run 24/7
 ```
 
+## Tests
+
+```bash
+python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt   # once
+.venv/bin/python -m pytest                                              # run
+```
+
+The venv is test-only — the scanners stay stdlib-only and keep running on the
+system `python3` under launchd.
+
+`tests/` pins the Tier A scoring behaviour (shipped 2026-07-19) for pons, pump
+and virtuals, so the pons discovery rebuild and every later scoring change
+happens under a safety net. The tests assert **separation and direction, never
+exact score values** — the weights are provisional until the Tier B refit, and
+pinning magnitudes would break every recalibration for no reason. Profiles come
+from the measured medians in `docs/research-notes-raw.md` (waves 20-24).
+
 ## Data
 
 Small derived artifacts (best_logic, smart_wallets, graduations, reputation) are

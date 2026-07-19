@@ -1,0 +1,3 @@
+# Test-only. The scanners themselves are stdlib-only and run on the system
+# python3 under launchd — nothing here is a runtime dependency.
+pytest>=8.0
