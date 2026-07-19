@@ -128,11 +128,15 @@ def hermes_brief(data, timeout=180):
     try:
         r = subprocess.run([HERMES, "chat", "-q", prompt], capture_output=True,
                            text=True, timeout=timeout, cwd=REPO)
-        m = re.search(r"<BRIEF>(.*?)</BRIEF>", r.stdout or "", re.S)
-        if m:
+        # hermes echoes the prompt back before the answer, and the prompt itself
+        # contains the literal "<BRIEF> ... </BRIEF>" instruction — a first-match
+        # search picks up that echo and yields "...". Take the LAST block with
+        # real content instead.
+        for block in reversed(re.findall(r"<BRIEF>(.*?)</BRIEF>", r.stdout or "", re.S)):
             # strip the TUI box-drawing gutter hermes prints transcripts with
-            txt = "\n".join(ln.strip(" │╭╮╰╯─") for ln in m.group(1).splitlines())
-            return txt.strip() or None
+            txt = "\n".join(ln.strip(" │╭╮╰╯─") for ln in block.splitlines()).strip()
+            if len(txt) >= 40:      # anything shorter is an echo, not a brief
+                return txt
     except Exception:  # noqa: BLE001
         pass
     return None
