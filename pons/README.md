@@ -10,24 +10,31 @@ launchpad on **Robinhood Chain**, same chain as vlad.fun) as early as possible.
 | | vlad.fun | pons.family |
 |---|---|---|
 | model | single "pump" bonding curve | factory deploys token + AMM pool, graduates at **4.2 ETH** paired |
-| data | had to decode raw on-chain events | **rich public REST API** — gives graduation progress directly |
+| data | had to decode raw on-chain events | same now — the REST API died 2026-07-18; we decode `TokenLaunched` |
 | size (this snapshot) | 286 coins, 3 graduations | **17,581 coins, 94 graduations** |
 | best signal | reconstruct early buy momentum | **graduation-progress velocity** (API hands us the progress) |
 
-pons publishes everything we need, so no ABI decoding is required:
+**That API is gone.** `pons.family` has been NXDOMAIN since ~2026-07-18 while
+the factory kept launching (~148/hour, measured on-chain), so the table below is
+history — discovery decodes events now, exactly like vlad.fun always did.
 
 | endpoint | use |
 |---|---|
-| `GET /api/pons-launches/latest` | newest launches (32) — new-coin feed |
-| `GET /api/pons-launches/recent-buys` | 100 most-active tokens with `graduationProgressPct`, `pairedPrincipalEth` — the **momentum feed** |
+| `GET /api/pons-launches/latest` | ~~new-coin feed~~ — replaced by `TokenLaunched` |
+| `GET /api/pons-launches/recent-buys` | 100 most-active tokens with `graduationProgressPct`, `pairedPrincipalEth` — the **momentum feed** behind NEAR-GRAD (dead while the domain is) |
 | `GET /api/pons-launches/graduations` | graduated tokens + timestamps (success labels) |
 | `GET /api/pons-launches` | full list (~15MB, current outcomes) |
 | `GET /api/noxa-market?token=` | per-token market state (reserves, latest buy) |
 
-On-chain (for true earliest detection, optional): RPC
+On-chain (now the default source): RPC
 `https://rpc.mainnet.chain.robinhood.com`, factory
 `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB`, pair token (WETH)
-`0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73`.
+`0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73`. Launch discovery reads the
+factory's `TokenLaunched` event (topic0 `0xdb51ea9a…`), which carries the token,
+deployer, pool and pair token, plus `initialBuyAmount` (the dev's block-0 buy)
+and `restrictionsEndBlock` (anti-sniper window — an **L1** block number, since
+this is an Arbitrum Orbit chain, so never compare it to our L2 `blockNumber`).
+`--discovery-source http` switches back if the domain ever returns.
 
 ## Findings
 
@@ -100,7 +107,7 @@ Stateful. Each poll records `(t, pairedETH, progress%)` per token, then:
 
 | file | purpose |
 |---|---|
-| `api.py` | pons REST endpoints (+ Robinhood Chain RPC / factory consts) |
+| `api.py` | launch discovery (`TokenLaunched` → `latest()`), symbol lookup, + the legacy REST endpoints / factory consts |
 | `collect.py` | snapshot launches + graduations, print base-rate dynamics, write `deployer_grads.json` |
 | `scan.py` | live scanner — poll momentum feed, compute velocity, rank, alert (terminal) |
 | `alert.py` | 1s loop → Telegram — velocity-only CLIMBING / NEAR-GRAD (noisier, superseded) |

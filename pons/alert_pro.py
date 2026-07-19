@@ -11,7 +11,8 @@ Backtested on 94 graduations vs 1,500 controls (real base rate 0.54%):
        fires at median 44s after launch; graduation happens ~90 min later.
 
 Pipeline per poll (~2s):
-  1. /latest registers new launches (token, pool, launchBlock, deployer).
+  1. TokenLaunched factory events register new launches (token, pool,
+     launchBlock, deployer) — see pons/api.py latest().
   2. For active coins (< 15 min old), incrementally pull Uniswap-V3 Swap logs
      from the coin's pool via RPC and update factor state.
   3. When the rule passes -> one 🎯 CONFIRMED Telegram alert with the factor
@@ -217,40 +218,9 @@ def total_supply(token):
     return _SUPPLY[token]
 
 
-_SYM = {}   # token -> resolved ERC20 symbol (or None)
-
-
-def _decode_symbol(hexstr):
-    """Decode an ERC20 symbol() return: ABI dynamic string OR legacy bytes32."""
-    raw = bytes.fromhex(hexstr[2:]) if hexstr.startswith("0x") else bytes.fromhex(hexstr)
-    if len(raw) >= 64:
-        # dynamic string: [offset(32)][length(32)][data...]
-        try:
-            length = int.from_bytes(raw[32:64], "big")
-            if 0 < length <= 64:
-                txt = raw[64:64 + length].decode("utf-8", "ignore").strip("\x00").strip()
-                if txt:
-                    return txt
-        except Exception:  # noqa: BLE001
-            pass
-    # legacy bytes32: right-padded ascii
-    txt = raw[:32].decode("utf-8", "ignore").strip("\x00").strip()
-    return txt or None
-
-
-def token_symbol(token):
-    """On-chain ERC20 symbol() — the reliable fallback when neither the pons API
-    nor DexScreener names the coin (was showing the raw 0x… address). Cached."""
-    if token not in _SYM:
-        sym = None
-        try:
-            r = rpc("eth_call", [{"to": token, "data": "0x95d89b41"}, "latest"], timeout=8)
-            if r and r != "0x":
-                sym = _decode_symbol(r)
-        except Exception:  # noqa: BLE001
-            sym = None
-        _SYM[token] = sym
-    return _SYM[token]
+# ERC20 symbol() lives in api.py — which resolves symbols in batch during
+# discovery — so both paths share one implementation and one cache. Call
+# api.token_symbol() directly.
 
 
 def _f(x):
@@ -342,16 +312,25 @@ class CoinState:
     __slots__ = ("token", "pool", "launch_block", "deployer", "symbol", "launched_at",
                  "token_is_0", "cursor", "buyers", "rebuy", "buy_weth", "sell_weth",
                  "n_buys", "n_sells", "snipers", "smart_hits", "smart_score", "dev_sold",
-                 "confirmed", "dead", "pct", "paired", "price", "pending_since", "fire_net")
+                 "confirmed", "dead", "pct", "paired", "price", "pending_since", "fire_net",
+                 "initial_buy_wei", "restrictions_end_block")
 
-    def __init__(self, token, pool, launch_block, deployer, symbol, launched_at):
+    def __init__(self, token, pool, launch_block, deployer, symbol, launched_at,
+                 pair_token=None, initial_buy_wei=None, restrictions_end_block=None):
         self.token = token
         self.pool = pool
         self.launch_block = launch_block
         self.deployer = deployer
         self.symbol = symbol
         self.launched_at = launched_at
-        self.token_is_0 = token < WETH
+        # Pool ordering from the launch event's pairToken when we have it. Every
+        # sampled launch pairs against WETH, so this is the same answer today —
+        # but a non-WETH pair would otherwise decode every buy as a sell.
+        self.token_is_0 = token < (pair_token or WETH)
+        # Launch-time measurements from TokenLaunched. Logged with the alert for
+        # the refit (#10), never scored. See api.decode_launch on the units.
+        self.initial_buy_wei = initial_buy_wei
+        self.restrictions_end_block = restrictions_end_block
         self.cursor = launch_block
         self.buyers = defaultdict(float)
         self.rebuy = defaultdict(int)
@@ -410,6 +389,31 @@ class CoinState:
     @property
     def top_share(self):
         return (max(self.buyers.values()) / self.buy_weth) if self.buy_weth > 0 else 1.0
+
+
+def launch_features(c, dep_launches):
+    """Raw launch-time measurements for one coin, logged alongside its alert.
+
+    Measurements only, never scores: the weights get refit (#10) and a derived
+    score in here would silently reinterpret every row accumulated under the
+    old formula. `initial_buy_wei` and `restrictions_end_block` come from the
+    TokenLaunched event (see api.decode_launch for units — the latter is an L1
+    block number); research flags dev initial-buy size as a graduation
+    predictor, but it earns weight only once the refit measures it.
+
+    This is the shape flap/pump/virtuals mirror in #7. None means "not
+    measured" and is distinct from 0.
+    """
+    return dict(
+        rebuyers=c.rebuyers, net_weth=round(c.net_weth, 4),
+        n_buys=c.n_buys, n_sells=c.n_sells,
+        buy_weth=round(c.buy_weth, 4), snipers=c.snipers,
+        top_share=round(c.top_share, 4) if c.buy_weth > 0 else None,
+        cap_eff=round(c.buy_weth / c.n_buys, 5) if c.n_buys else None,
+        smart_score=c.smart_score, dep_count=dep_launches, dev_sold=c.dev_sold,
+        initial_buy_wei=c.initial_buy_wei,
+        restrictions_end_block=c.restrictions_end_block,
+    )
 
 
 def social_line(soc):
@@ -662,8 +666,15 @@ def main():
     ap.add_argument("--neargrad", dest="neargrad", action="store_true", default=False,
                     help="emit NEAR-GRAD alerts (default OFF — net-negative in tracking)")
     ap.add_argument("--no-neargrad", dest="neargrad", action="store_false")
+    # Launch discovery source. On-chain by default: pons.family went NXDOMAIN
+    # ~2026-07-18 while the factory kept launching. `http` is the escape hatch
+    # if the domain ever returns; it is not on the critical path otherwise.
+    ap.add_argument("--discovery-source", choices=("rpc", "http"),
+                    default=api.DISCOVERY_SOURCE,
+                    help="where new launches come from (default: rpc / TokenLaunched events)")
     ap.add_argument("--dry-run", action="store_true")
     args = ap.parse_args()
+    api.DISCOVERY_SOURCE = args.discovery_source
 
     token_tg, chat_id = telegram.load_creds()
     dry = args.dry_run or not (token_tg and chat_id)
@@ -679,6 +690,7 @@ def main():
           f"& NOT(dev-spam) & net-hold {args.hold:.0f}s & social={'required' if args.require_social else 'off'}  "
           f"smart-wallets={len(smart)} (weighted)  neargrad={'on' if args.neargrad else 'off'}  "
           f"marketing-feed={'on' if args.marketing_feed else 'off'}  "
+          f"discovery={args.discovery_source}  "
           f"-> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
 
     coins = {}          # token -> CoinState
@@ -725,18 +737,29 @@ def main():
 
     def register_launches():
         try:
+            n = 0
             for L in api.latest():
                 tok = L["token"].lower()
                 if tok in coins or not L.get("pool") or not L.get("blockNumber"):
                     continue
+                n += 1
                 # #4: a missing/unparseable launchedAt used to leave launched_at=None,
                 # and the active filter (needs launched_at truthy) then never scanned
                 # the coin — a silent CONFIRMED miss. Fall back to now.
                 launched_at = parse_ts(L.get("launchedAt")) or time.time()
                 dep = (L.get("deployer") or "").lower()
                 coins[tok] = CoinState(tok, L["pool"], L["blockNumber"],
-                                       dep, L.get("symbol"), launched_at)
+                                       dep, L.get("symbol"), launched_at,
+                                       pair_token=L.get("pairToken"),
+                                       initial_buy_wei=L.get("initialBuyAmount"),
+                                       restrictions_end_block=L.get("restrictionsEndBlock"))
                 dep_tokens[dep].add(tok)   # set add — no double count on re-seen launches
+            if n:
+                # Discovery going quiet is what the 2026-07-18 outage looked
+                # like from the outside; make it visible in the log. (#6 turns
+                # this into an actual watchdog.)
+                print(f"[{time.strftime('%H:%M:%S')}] +{n} launch{'es' if n > 1 else ''} "
+                      f"({len(coins)} tracked)", flush=True)
         except Exception as e:  # noqa: BLE001
             print(f"  latest error: {e}", flush=True)
 
@@ -831,18 +854,24 @@ def main():
                                      price0=c.price, liq0=(soc or {}).get("liq_usd"), gmgn=g,
                                      # launch-time factors, for the score refit (Tier B backtest):
                                      # scores are opinions, these are the raw measurements.
-                                     f=dict(rebuyers=c.rebuyers, net_weth=round(c.net_weth, 4),
-                                            n_buys=c.n_buys, n_sells=c.n_sells,
-                                            buy_weth=round(c.buy_weth, 4), snipers=c.snipers,
-                                            top_share=round(c.top_share, 4) if c.buy_weth > 0 else None,
-                                            cap_eff=round(c.buy_weth / c.n_buys, 5) if c.n_buys else None,
-                                            smart_score=c.smart_score, dep_count=dc)))
+                                     features=launch_features(c, dc)))
+
+    nb_quiet_until = [0.0]   # boxed: back off recent-buys after it fails
 
     def check_neargrad(now):
+        # recent-buys is the last pons.family dependency, and while that domain
+        # is NXDOMAIN each call burns ~6s in urllib retries — inside the same
+        # loop body as discovery, which stretched a 2s poll to ~11s and slowed
+        # the CONFIRMED path this scanner exists for. Back off on failure rather
+        # than dropping the call, so the coin state it feeds (pct/price) still
+        # updates if the domain returns. #5 replaces the feed itself.
+        if now < nb_quiet_until[0]:
+            return
         try:
             feed = api.recent_buys()
         except Exception as e:  # noqa: BLE001
-            print(f"  recent-buys error: {e}", flush=True)
+            nb_quiet_until[0] = now + 300
+            print(f"  recent-buys error: {e} (backing off 5 min)", flush=True)
             return
         for r in feed:
             tok = r["token"].lower()
@@ -873,7 +902,7 @@ def main():
             if tok in near_sent:
                 continue
             sym = (coins[tok].symbol if tok in coins else None) or r.get("symbol") \
-                or token_symbol(tok) or tok[:8]
+                or api.token_symbol(tok) or tok[:8]
             soc = dex_socials(tok, now)
             paid = dex_paid(tok, now)
             price_f = _f(price)
@@ -926,7 +955,7 @@ def main():
         for tok, notes in found.items():
             mkt_seen.add(tok)
             soc = dex_socials(tok, now)
-            sym = (coins[tok].symbol if tok in coins else None) or token_symbol(tok) or (tok[:10] + "…")
+            sym = (coins[tok].symbol if tok in coins else None) or api.token_symbol(tok) or (tok[:10] + "…")
             origin = "🐸 pons.family" if tok in coins else ("🦇 flap.sh" if tok.endswith("7777") else "❓ unknown launchpad")
             dispatch("\n".join([
                 f"💰 <b>MARKETING</b> — <b>{html.escape(str(sym))}</b> · {origin} · ⛓ <b>ROBINHOOD</b>",

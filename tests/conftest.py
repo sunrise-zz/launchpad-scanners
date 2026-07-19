@@ -57,6 +57,13 @@ def alertfmt():
 
 
 @pytest.fixture
+def pons_api():
+    """Function-scoped: the discovery tests monkeypatch module state (cursor,
+    caches, DISCOVERY_SOURCE), so they must not share one instance."""
+    return _load("pons_api", "pons/api.py")
+
+
+@pytest.fixture
 def make_coin(pons):
     """Build a real CoinState with the swap-derived state a scored coin would have.
 

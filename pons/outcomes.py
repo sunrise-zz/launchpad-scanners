@@ -27,7 +27,7 @@ ALERTS = os.path.join(TRACK_DIR, "alerts.jsonl")
 
 
 def record_alert(platform, chain, tier, symbol, token, score, track,
-                 price0=None, mcap0=None, liq0=None, gmgn=None, tg=None):
+                 price0=None, mcap0=None, liq0=None, gmgn=None, tg=None, features=None):
     """Append one alert row. Best-effort — never raises into the scanner loop.
 
     `gmgn`: pass a prefetched pons/gmgn.py snapshot to avoid a duplicate API
@@ -35,7 +35,16 @@ def record_alert(platform, chain, tier, symbol, token, score, track,
     the ≤8s timeout never delays the Telegram alert itself).
     `tg`: {"msg_id", "text", "buttons"} of the sent Telegram message — lets
     agent/analyst.py append its AI verdict INTO that message (edit-in-place)
-    instead of posting a separate follow-up that gets visually orphaned."""
+    instead of posting a separate follow-up that gets visually orphaned.
+    `features`: raw launch-time measurements (never scores) for the refit to
+    fit on. Stored under row["f"], the same short key backtest_multifactor.py
+    already uses for a feature dict. Omitted when absent, so old rows and new
+    ones read alike.
+
+    These were passed by alert_pro as f=… from ab4a8f2 before any such
+    parameter existed, so every pons CONFIRMED alert raised TypeError here —
+    after the Telegram send, which left the alert delivered but untracked. Keep
+    this signature and alert_pro's record dict in step."""
     row = {
         "t": time.time(),
         "platform": platform,
@@ -61,6 +70,12 @@ def record_alert(platform, chain, tier, symbol, token, score, track,
         row["gmgn"] = gmgn
     if tg and tg.get("msg_id"):
         row["tg"] = tg
+    if features:
+        try:
+            json.dumps(features)   # one bad field must not cost us the whole row
+            row["f"] = features
+        except (TypeError, ValueError):
+            pass
     try:
         os.makedirs(TRACK_DIR, exist_ok=True)
         with open(ALERTS, "a") as f:

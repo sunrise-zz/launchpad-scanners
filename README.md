@@ -15,7 +15,8 @@ Optional Telegram alerts.
 ## Platforms
 
 ### `pons/` — pons.family (fixed-supply, graduates at 4.2 ETH)
-Rich public API gives graduation progress directly. Best signal is **multi-factor
+Launches are discovered on-chain from the factory's `TokenLaunched` event (the
+public API went NXDOMAIN 2026-07-18). Best signal is **multi-factor
 confirmation** from on-chain early trading. Backtested on 94 graduations vs 1,500
 controls:
 
