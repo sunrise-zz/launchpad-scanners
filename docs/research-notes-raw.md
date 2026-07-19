@@ -445,7 +445,320 @@ counts organic flow. (Reconciles with wave 9 U-curve: bots pile onto already-int
   buy-sell) + Telegram/Neynar social + Kaito Yaps + Santiment free. Sources: arXiv 2602.00776, 2602.14860,
   2607.02823, 2507.01963, 2602.13480, 2607.02795; docs.kaito.ai; docs.neynar.com; bitquery/geckoterminal.
 
-── RESEARCH STATUS: 11 waves done. Angles still queued for later loop iterations: EVM-specific detection
-(Base/Robinhood honeypot-sim, LP events, Clanker/Zora on-chain), ML feature-combination/model architecture,
-backtesting methodology (labeling + walk-forward + look-ahead avoidance), public KOL/alpha-wallet datasets
-(kolscan), Telegram alpha-caller track records, time-of-day/regime/market-beta context. NO decisions yet.
+## WAVE 12 — EVM-specific detection (Base/Robinhood) [done]
+
+**GoPlus token_security (Base/EVM static analysis)** — `GET https://api.gopluslabs.io/api/v1/token_security/{chain_id}?contract_addresses={addr1,addr2,...}`; chain_id **8453 = Base**. No API key needed for basic/free access (~30 calls/min free tier); Pro/Ultra needs a signed `access_token` (sha1(app_key+time+app_secret) via console.gopluslabs.io) for batch (100 addrs/query) + higher throughput. Full confirmed field list: `buy_tax, sell_tax, cannot_buy, cannot_sell_all, is_honeypot, is_blacklisted, is_whitelisted, slippage_modifiable, transfer_pausable, is_mintable, owner_change_balance, hidden_owner, external_call, trading_cooldown, personal_slippage_modifiable, can_take_back_ownership, is_open_source, is_proxy, is_anti_whale, is_in_dex, selfdestruct, holder_count, holders[], lp_holder_count, lp_holders[], lp_total_supply, creator_address/balance/percent, owner_address/balance/percent, dex[], total_supply`. Sources: gopluslabs.io/en/token-security-api; docs.gopluslabs.io/reference/tokensecurityusingget_1; github.com/Normalizex/gopluslabs-api.
+
+**GoPlus static vs honeypot.is dynamic — use BOTH, disagreement itself is a signal**: GoPlus = static bytecode/source analysis (catches known patterns pre-emptively, misses novel obfuscation); honeypot.is = live buy→sell tx simulation (catches runtime behavior GoPlus misses, but can't guarantee future-safety since owner can flip a switch post-check). GoPlus-clean + honeypot.is-fails (or vice versa) = elevated-risk signal in itself. Sources: arXiv 2309.04700 (Trapdoor Tokens survey); honeypot.is.
+
+**honeypot.is simulation API** — `GET https://api.honeypot.is/v2/IsHoneypot?address={token}&pair=...&chainID=...&simulateLiquidity=true`. No API key required (free, open). Covers **Ethereum, BSC, Base only** — no confirmed Uniswap V4 support (gap for Clanker v4/Zora v4/Flaunch pools — flag for build team). Returns `honeypotResult.isHoneypot`, `simulationSuccess`, `simulationResult` (buy/sell tax %, maxSell/maxBuy), `holderAnalysis` (holders/successful/failed/siphoned/averageTax/highestTax/taxDistribution — simulates sells across REAL holders, not just querying wallet, a stronger rug-detector than single-wallet probe), `flags[]`. Sources: docs.honeypot.is/ishoneypot; honeypot.is/base.
+
+**Uniswap V2 LP event detection** (classic pairs, e.g. many Clanker v3/v3.1 pools) — topic0 for `eth_getLogs`/Basescan `getLogs`: `PairCreated` → `0x0d3648bd0f6ba80134a33ba9275ac585d9d315f0ad8355cddefde31afa28d0e`; `Mint` → `0x4c209b5fc8ad50758f13e2e1088ba56a560dff690a1c6fef26394f4c03821c4`; `Burn` → `0xdccd412f0b1252819cb1fd330b93224ca42612892bb3f4f789976e6d81936496`; `Sync` → `0x1c411e9a96e071241c2f21f7726b17ae89e3cab4c78be50e062b03a9fffbbad1`. **LP-lock detection**: check whether LP-token recipient post-Mint is `0x000...dEaD` (burn) or a known locker (Unicrypt/Team Finance) — neither = unlocked/rug-able. **Real-time rug tell**: `Burn` with `to` ≠ pool/expected recipient (LP owner pulling to an EOA), same/next-block large-magnitude `Sync` = classic LP-removal rug (reserves crash). Free via any Base RPC `eth_getLogs` or Basescan/Blockscout. Sources: docs.uniswap.org/contracts/v2/reference/smart-contracts/pair; rareskills.io/post/uniswap-v2-mint-and-burn.
+
+**Uniswap V4 event model — IMPORTANT: Clanker v4, Flaunch, and Zora's CoinCreatedV4 all use this, NOT V2 events**. V4 is a singleton PoolManager (no per-pool contract) — watch: `Initialize(PoolId, currency0, currency1, fee, tickSpacing, hooks, sqrtPriceX96, tick)` (pool creation; non-null `hooks` = custom hook attached, relevant since Clanker/Zora/Flaunch all use hooks) and `ModifyLiquidity(PoolId, sender, tickLower, tickUpper, liquidityDelta, salt)` (ONE event covers add+remove — a rug shows as large-negative `liquidityDelta`, no separate Burn/Sync; must read pool state via `poolManager.getSlot0` since there's no auto Sync event). LP-lock check becomes: does the deployer retain the LP position NFT, or is it held by a locker contract (see Clanker below). Sources: docs.uniswap.org/contracts/v4/reference/core/PoolManager; uniswapfoundation.org/blog/how-to-navigate-uniswap-v4-data.
+
+**EVM multi-hop funder-graph** — Etherscan API V2 unified endpoint `api.etherscan.io/v2/api?chainid=8453&module=account&action=txlistinternal|txlist|...&address=`; free tier 5 calls/sec /100k calls/day, but **free tier has been shrinking** (July-2026 cut max records/request 10k→1k, some chains losing free coverage — verify current status before relying on it). **Blockscout is the better free fallback**: `base.blockscout.com` REST API v2, `GET /api/v2/addresses/{hash}` + internal-tx endpoints, no key needed for basic use (IP-rate-limited not key-limited); paid Pro API tier exists but also recently cut bulk "internal-tx-by-block-range" + per-request limits. Net recommendation: for k≥3-hop walkback, direct `eth_getLogs`/`eth_getBlockByNumber` via a free/cheap RPC is more reliable than either explorer's shrinking free API. Sources: docs.etherscan.io/etherscan-v2/rate-limits; docs.blockscout.com/devs/apis/requests-and-limits; base.blockscout.com/api-docs.
+
+**Clanker (Base) on-chain launch detection** — Factories: v3.0.0 `0x375C15db32D28cEcdcAB5C03Ab889bf15cbD2c5E`; v3.1.0 `0x2A787b2362021cC3eEa3C24C4748a6cD5B687382`; v4.0.0 `0xE85A59c628F7d27878ACeB4bf3b35733630083a9`. `TokenCreated(tokenAddress, lpNftId, deployer, name, symbol, supply, _supply, lockerAddress)` — `lockerAddress` tells you which contract holds the LP NFT (v4 uses `ClankerLpLockerFeeConversion`, auto-collects/distributes fees to ≤7 reward recipients; a `lockerAddress` NOT matching Clanker's known official lockers = possible fork with rug-capable LP custody = red flag). v4 has pluggable MEV modules (e.g. `ClankerMevDescendingFees` — LP fee starts up to 80%, decays parabolically ≤2min, a built-in sniper-tax — presence is a mild legitimacy/positive signal) + a public `ClankerSniperAuctionV0`. Public API at clanker.world/docs/api-reference/public (site blocked automated fetch this pass — needs direct human check); Bitquery has a paid "Base Clanker API". Sources: clanker.gitbook.io/clanker-documentation/references/deployed-contracts; clanker.gitbook.io/documentation/references/core-contracts/clankertoken-v3.1.0-and-v4.0.0.
+
+**Zora (Base) on-chain launch detection** — Single `ZoraFactory` at **the same address on every supported chain incl. Base**: `0x777777751622c0d3258f214F9DF38E35BF45baF3`. Events: `CoinCreated(...)` for classic pools; `CoinCreatedV4` (Content Coins) and `CreatorCoinCreated` (Creator Coins) for V4-based coins — both emit a full `PoolKey`+`poolKeyHash` (no pool address, since V4 has none). All hook contracts consolidated into a single `ZoraV4CoinHook` (SDK v2.3.0+). Public REST API `api-sdk.zora.engineering/api` (Swagger at .../docs) — **requires an API key** (not anonymous like GoPlus/honeypot.is); Explore-feed queries (new/trending/top-gainer) work as a "new launch" firehose without watching factory events directly. Farcaster/Base-App tie-in: Zora coins are the mechanism behind Farcaster post-tokenization + Coinbase "Creator Coins" in the Base App. Sources: docs.zora.co/coins/contracts/factory; docs.zora.co/coins/sdk/public-rest-api; docs.zora.co/coins/contracts/hook.
+
+**Flaunch (Base)** — Factory `0xfdCE459071c74b732B2dEC579Afb38Ea552C4e06`, built on Uniswap V4 (hooks-based like Clanker v4/Zora). `PoolCreated(_poolId, _memecoin, _memecoinTreasury, _tokenId, _currencyFlipped, _flaunchFee, _params)`. Official SDK (`@flaunch/sdk`) has `getPoolCreatedFromTx()` + a `usePoolCreatedEvents` React hook — lowers the lift vs raw log-decoding. Sources: docs.flaunch.gg/developer-resources/contract-addresses; github.com/flayerlabs/flaunch-sdk.
+
+**Virtuals Protocol (Base) — research gap flagged**: core launch contract is `AgentFactoryV3`; original "Genesis" launchpad flow replaced late-2025 by a system called "Unicorn" (mechanism overhaul). No exact Base contract address for AgentFactoryV3/Unicorn was recoverable from search alone — needs a direct Basescan/whitepaper.virtuals.io lookup. Virtuals is dual-chain: Base agents get a Uniswap V2 LP, Solana-side agents get a Meteora pool — these are separate venues, not literally bridged. Sources: whitepaper.virtuals.io/builders-hub/agent-launch-mechanisms/more-on-standard-launch.
+
+**Robinhood Chain (not previously scoped for EVM detection)** — Mainnet live July 1, 2026; Arbitrum Orbit L2 settling to Ethereum, **chainId 4663**, gas=ETH, public RPC `rpc.mainnet.chain.robinhood.com`, explorer is a **Blockscout instance** (`robinhoodchain.blockscout.com`, supported by Blockscout Pro API). Practical implication: all Base Blockscout-based funder-graph/log tooling should be directly reusable on Robinhood Chain by swapping chain_id/host. **GoPlus/honeypot.is coverage of chainId 4663 NOT confirmed** (too new / not in either's published chain list) — open item: probe `token_security/4663/...` and `IsHoneypot?chainID=4663` directly. Sources: docs.robinhood.com/chain/connecting; blog.arbitrum.io/robinhood-chain-mainnet; blog.blockscout.com/build-on-robinhood-chain-with-the-blockscout-pro-api.
+
+**Open follow-ups** (docs sites 403'd to automated fetch, need human/browser check): clanker.world/docs/api-reference/public full spec, docs.honeypot.is full JSON schema, docs.gopluslabs.io full param reference, docs.bitquery.io Base Clanker GraphQL schema.
+
+## WAVE 13 — ML feature-combination + backtesting methodology [done]
+
+**⚠️ DIRECT PRIOR ART (closest thing to our exact problem)**: arXiv 2602.14860 (Marino/Naviglio/Tarantelli/
+Lillo, "Predicting the success of new crypto-tokens: the Pump.fun case") explicitly modeled graduation-
+probability conditional on bonding-curve SOL-locked state, but used non-parametric binning + control
+charts for dump-detection and explicitly declined to fit Kaplan-Meier/Cox/logit/ML, flagging those as
+future work → the GBM/scorecard gap we're closing is genuinely open, not solved-and-ignored. arXiv
+2607.02823 (survival/Cox, already in wave 9/11) is the closest published outcome model but is hazard-based
+not classification-based. A Medium writeup (Krzeckovskij, Apr 2026) built literal RandomForest-on-
+extreme-imbalance for pump.fun graduation from first ~100 blocks/~40s of life — directionally validates
+"tree ensemble + short early-window features" as viable but is a blog post, not peer-reviewed (treat as
+weak-tier corroboration only). Sources: arxiv.org/abs/2602.14860; arxiv.org/pdf/2607.02823;
+medium.com/@alleg88/predicting-pump-fun-token-graduation-with-random-forest-on-extremely-imbalanced-data.
+
+**1. MODEL CHOICE for 1-in-10k+ positive rate, tabular features:**
+- **GBM (LightGBM/XGBoost/CatBoost) is the established default for tabular data generally** — tree
+  ensembles beat deep nets on medium-sized tabular data because their inductive bias (axis-aligned splits,
+  rotation-non-invariance, native robustness to uninformative/irrelevant features) matches tabular data's
+  structure; DL needs much more data/tuning to match (Grinsztajn et al. 2022, NeurIPS, "Why do tree-based
+  models still outperform deep learning on typical tabular data?"). No memecoin-specific paper compares
+  GBM-vs-logit directly, so this is generalized-from-adjacent-domain, not memecoin-native evidence.
+- **Handling the imbalance itself — use loss reweighting, NOT resampling, as the primary lever**:
+  `scale_pos_weight` (XGBoost) / `is_unbalance` (LightGBM) ≈ ratio of neg:pos (for us ~19,999:1 theoretical,
+  but tune don't trust the formula value — empirically the naive ratio overweights and hurts precision;
+  grid-search scale_pos_weight ∈ {1, 10, 50, 100, ratio} and pick by AUPRC not accuracy).
+  Source: woteq.com/how-to-use-xgboost-scale_pos_weight-parameter; apxml.com boosting-imbalance chapter.
+- **SMOTE — AVOID or heavily restrict for our regime.** Known failure modes directly applicable to us:
+  (a) generates synthetic points by interpolating between minority neighbors — with our ~1:20,000 ratio the
+  few real winners are so sparse that "neighbors" are often not meaningfully similar, so synthetic points
+  land in implausible regions of feature space (fabricated bundler%/top10%/smart-money combos that never
+  co-occur in reality); (b) high-dimensional blowup — extreme values stop being exceptional once you have
+  dozens of correlated concentration/social/microstructure features, so SMOTE's convex-hull assumption
+  breaks down; (c) can silently leak info if oversampling is done BEFORE train/test split (classic bug —
+  synthetic test points get "seen" via their real-point neighbors during training). If used at all: fit
+  only inside the training fold, and prefer variants that filter implausible synthetic points ("conservative
+  plausibility-filtered SMOTE", Frontiers 2026) over vanilla SMOTE. Sources: Frontiers 2026 (frontiersin.org
+  10.3389/frai.2026.1871972); Springer 2022 theoretical-distribution analysis (10.1007/s10994-022-06296-4).
+- **Undersampling vs class-weighting — no consistent winner empirically**; large empirical study found
+  resampling changed AUPRC materially in only ~12% of cases and was MORE likely to hurt than help; when it
+  does help, undersampling trades recall-up for majority-class info loss / higher variance (fewer effective
+  training rows). → **recommendation for us: class-weighting (or focal loss) as default; only add
+  undersampling as a secondary experiment, always compared against the weighted-baseline on AUPRC, never
+  assumed better.** Source: PMC9333262 empirical evaluation of sampling methods.
+- **CatBoost-specific edge relevant to us**: ordered target-statistics + ordered boosting specifically
+  prevent target leakage from categorical/high-cardinality features (e.g. launchpad name, DEX, deployer
+  cluster ID) without manual target-encoding — useful since several of our features are effectively
+  categorical (launchpad, chain, social-platform-present). Source: arXiv 1706.09516 (CatBoost paper).
+
+**2. EVALUATION METRIC — AUPRC + operating points, not AUC-ROC:**
+- **Why AUPRC**: under extreme imbalance, TN is enormous, so FPR = FP/(FP+TN) stays near-zero even when
+  the model generates thousands of false positives — ROC curves look deceptively good while precision
+  (what actually matters when a human/bot has to act on every alert) collapses. AUPRC uses precision
+  (TP/(TP+FP)) directly, which is sensitive to exactly the failure mode we care about (too many false
+  alerts burning capital/attention). As prevalence p→0, precision ≈ (p·TPR)/((1−p)·FPR) → 0 unless FPR is
+  driven extremely small — formalizes "FP tolerance must be brutal." Sources: towardsdatascience.com
+  imbalanced-data-stop-using-roc-auc; NeurIPS 2024 "A Closer Look at AUROC and AUPRC under Class Imbalance"
+  (dl.acm.org/doi/10.5555/3737916.3739316) — caveat: this paper shows AUPRC is NOT universally superior in
+  all imbalance regimes and can unfairly favor subpopulations with higher local positive rates, so don't
+  treat AUPRC as a silver bullet either — report both, plus operating points below.
+- **Operating-point reporting (the actually-actionable numbers for us)**: report precision@top-K (e.g.
+  precision among our top 100 highest-scored alerts per week — directly answers "if we only acted on the
+  best N alerts, how many won") AND recall-at-fixed-FP-budget (e.g. "at ≤X false alerts/day, what fraction
+  of eventual winners did we still catch") — the latter mirrors how security/fraud teams report under
+  analyst-capacity constraints ("≤k false alarms per N items reviewed"). Concretely for us: pick FP budget
+  = alerts/day the team can actually act on, sweep threshold, report recall at that FP count. Source:
+  arXiv 2601.18696 (hardware-trojan detection, exact framing "recall at fixed FPR budget", reports e.g.
+  55.6% recall at ≤11 FPs / 11,392 gates at FPR≤0.1% — same shape of problem as ours).
+
+**3. CALIBRATION — isotonic vs Platt vs WOE scorecard (our stated goal: kill hand-tuned weights):**
+- **Isotonic regression**: non-parametric, only assumes monotonicity — flexible enough to fix any shape of
+  miscalibration, but overfits with sparse data, especially in the thin high-score tail (exactly where we
+  have the fewest labeled winners). Rule of thumb from calibration literature: isotonic ≥ Platt once
+  calibration set is ~1000+ points; below that, Platt is safer. **Our alert volumes (thousands-tens of
+  thousands total, but likely only tens to low-hundreds of POSITIVE outcomes) put us in the danger zone for
+  isotonic specifically in the region that matters most (top of the score distribution) — use Platt (or
+  isotonic with heavy regularization / binned isotonic) until positive-label count is large.** Source:
+  Niculescu-Mizil & Caruana ICML05 "Predicting Good Probabilities with Supervised Learning"
+  (cs.cornell.edu/~alexn/papers/calibration.icml05.crc.rev3.pdf); abzu.ai calibration-intro-part-2.
+- **WOE/scorecard approach — directly matches our "move off hand-weights" goal, recommend as primary path**:
+  Weight of Evidence for a bin = ln( %(non-events in bin) / %(events in bin) ) [or the inverse sign
+  convention — pick one and be consistent]; equivalently ln(good/bad odds in bin vs overall). Bin each raw
+  feature (bundler%, top10%, sniper-count, smart-money-count, etc.) into ~5-10 monotonic bins (constrained
+  so WOE is monotonic in the raw feature — enforced via optimal-binning solvers, not manual cutoffs) →
+  Information Value per feature = Σ_bins (%good − %bad) × WOE_bin, standard IV interpretation bands: <0.02
+  useless, 0.02-0.1 weak, 0.1-0.3 medium, 0.3-0.5 strong, >0.5 suspicious/likely-leaky. Fit logistic
+  regression on the WOE-transformed features (not raw features) — **the resulting logistic coefficients ARE
+  literally what our current "hand-tuned weights" are trying to approximate by eyeball**: WOE values are
+  mathematically identical to the coefficients from a logistic regression with the raw categorical
+  indicators (planspace.org "Weight of Evidence is logistic coefficients"). Final score = intercept + Σ
+  (coefficient_i × WOE_i) → a fully principled, auditable log-odds sum that REPLACES our ad hoc weighted
+  sum with data-fit weights, keeps the same "sum of feature contributions" mental model the team already
+  uses, and gives free bin-level interpretability for debugging ("this alert scored high because bundler%
+  bin contributed +2.1 log-odds"). Practical tooling: OptBinning (convex/MIP optimal binning with monotonic
+  constraints, ~17x faster than scorecardpy per benchmark) or scorecardpy. Sources: listendata.com WOE-IV;
+  ucanalytics.com banking-case-study; planspace.org/20210917-weight_of_evidence_is_logistic_coefficients;
+  github.com/guillermo-navas-palencia/optbinning; arXiv 2509.09855 (info-theoretic scorecard framework).
+
+**4. WALK-FORWARD / OUT-OF-TIME VALIDATION — concrete structure against alerts.jsonl + snapshots.jsonl:**
+- **Naive k-fold leaks via regime correlation**: random k-fold shuffles alerts across time, so a model can
+  "learn" that e.g. bundler% > X was predictive during the Sept-2025 bull window and get tested on OTHER
+  Sept-2025 alerts in a held-out fold — this leaks the market-regime signal (graduation base rate was
+  ~0.63% then vs ~0.2% now per our own context) rather than testing genuine feature predictiveness.
+- **Purged K-Fold + embargo (López de Prado, standard in financial ML)**: for each alert in a test fold,
+  its label isn't "resolved" (graduated/rugged/mooned) until some maturity horizon (e.g. 7/30/90 days of
+  snapshots.jsonl data) after alert time. PURGE: remove from the training set any alert whose
+  label-formation window [alert_ts, alert_ts+maturity] overlaps the test fold's time range — otherwise
+  training rows can "see" outcomes that happened concurrently with/inside the test window via correlated
+  market conditions. EMBARGO: additionally exclude a buffer period immediately after each test fold from
+  training, since features computed near the fold boundary can still encode short-horizon leakage.
+  Source: en.wikipedia.org/wiki/Purged_cross-validation; risklab.ai financial cross-validation writeup;
+  López de Prado "Advances in Financial Machine Learning" (industry-standard reference, not fetched
+  directly here but the purging/embargo algorithm is reproduced across the sources above).
+- **Concrete recipe for alerts.jsonl/snapshots.jsonl**: (1) sort alerts.jsonl by alert_ts; (2) define
+  label-maturity horizon per outcome type (e.g. "rugged" can resolve in hours, "graduated" in days,
+  "mooned to $10M" may take weeks — use the LONGEST relevant horizon, or model each outcome separately with
+  its own horizon, pulling the outcome from snapshots.jsonl at t=alert_ts+horizon, or first-crossing time if
+  earlier); (3) build rolling walk-forward splits: train on alerts with alert_ts < T, purge any training
+  alert whose maturity window extends past T, embargo an extra buffer, test on alerts with alert_ts ∈
+  [T, T+Δ]; (4) slide T forward in fixed steps (e.g. monthly) — this is the walk-forward analog and is
+  strictly preferred over a single train/test split because it also SHOWS drift (see #6) — track AUPRC per
+  window over time, don't just report one aggregate number.
+- **Immature labels at the right edge**: any alert within the last `maturity_horizon` of "now" doesn't have
+  a resolved outcome yet — exclude these from train/test entirely (don't label them as negative just
+  because they haven't mooned yet — that's a subtle but common bug that injects false negatives near the
+  most recent, most-regime-relevant data). Related concept: "outcome maturity" / delayed-ground-truth
+  monitoring — arXiv 2604.15740 formalizes this as label-freshness/blind-period tracking for risk-decision
+  systems (their finding: pure concept-drift with constant P(X) is undetectable by feature-only proxies,
+  reinforcing that we need the actual matured outcome labels, not shortcuts).
+
+**5. SURVIVORSHIP / LOOK-AHEAD BIAS from only tracking alerted tokens:**
+- **The core problem stated precisely**: alerts.jsonl is a biased sample — it's conditioned on our OWN
+  scanner having already decided the token looked interesting, so any backtest of "does feature X predict
+  outcome" is confounded by "features that made OUR heuristic score it high" — we can validate ranking
+  WITHIN alerted tokens, but can't learn true base rates or true feature/outcome relationships for the full
+  launch population from alerts.jsonl alone. This is exactly the observational "selection on treatment"
+  setup in causal inference.
+- **Two practical fixes, in order of practicality for us**:
+  (a) **Stratified/matched random sampling of NON-alerted launches ("shadow" control), on the same chain/
+  launchpad/time-bucket as each alert** — pull a random sample of tokens from the SAME source (pump.fun/
+  flap/etc.) launched in the same time window that did NOT trigger an alert, snapshot them the same way
+  (price/mcap/holders over time) so snapshots.jsonl-equivalent history exists for controls too. This is the
+  cheap, good-enough-for-most-purposes fix: lets you compute true base rates, and lets you check whether
+  alerted-and-won tokens actually differ from a matched random launch, not just from other alerted tokens.
+  (b) **Inverse-propensity weighting (IPW) framing, if (a) alone proves insufficient**: model
+  P(alerted | features-at-launch) (a propensity model — literally: fit a classifier on
+  alerted-vs-shadow-sampled-controls using the same features), then weight alerted observations by
+  1/P(alerted|X) when estimating outcome relationships — this is the same machinery as IPTW in
+  observational medical studies correcting for confounded treatment assignment (in our case "treatment" =
+  "our own scanner alerted on it"). Doubly-robust variants (combine propensity weighting + outcome
+  regression) are more robust to propensity-model misspecification if we go this route. This is more
+  statistically rigorous but needs the shadow-control data from (a) to even fit the propensity model — so
+  (a) is a prerequisite either way, not an alternative. Sources: academic.oup.com/ckj IPTW intro;
+  pmc.ncbi.nlm.nih.gov/PMC7377436 weighted-nearest-neighbor control selection; sciencedirect.com
+  survivor-bias-in-case-control (stratify-on-survival-time + negative-control framing, directly analogous).
+- **Assessment for our stated question ("is stratified random sampling sufficient, or do we need IPW")**:
+  stratified/matched random sampling of non-alerts is the RIGHT FIRST STEP and likely sufficient for our
+  main use cases (estimating true base rates, sanity-checking whether alerted tokens actually outperform
+  random launches, checking if hand-picked features have any signal at all pre-alert). Full IPW/causal
+  machinery is over-engineering until (a) is in place and shows a real signal worth refining — treat IPW as
+  a v2 refinement, not the wave-1 fix.
+
+**6. DRIFT / REFIT CADENCE — PSI + rolling windows:**
+- **Population Stability Index (PSI)** — standard credit-risk drift metric, compares a feature's (or the
+  score's) distribution between a reference window (e.g. model-training period) and a current window across
+  the same bins: PSI = Σ_bins (%current − %reference) × ln(%current/%reference). Thresholds (industry
+  convention): PSI < 0.1 stable, 0.1-0.25 moderate shift/watch, > 0.25 significant shift → retrain trigger.
+  Apply PSI to (a) each raw feature's distribution AND (b) the final score distribution AND (c) the
+  graduation/outcome base rate itself — given our stated 0.63%→0.2% base-rate drift over 8 months, base-rate
+  PSI will almost certainly breach 0.25 well before 8 months elapse, meaning refit cadence should be driven
+  by MONITORING PSI continuously, not a fixed calendar cadence. Sources: coralogix.com PSI intro;
+  fiddler.ai PSI blog; geeksforgeeks.org PSI; note a 2026 statistical-testing refinement exists (turns PSI
+  into a proper hypothesis test with Type I/II error control) if ad hoc thresholds prove noisy at our alert
+  volumes — crc.business-school.ed.ac.uk sample-size-dependent PSI paper.
+  - **Concrete cadence recommendation**: rolling 30-day training window as default (matches typical
+  memecoin-cycle attention half-life faster than the 90-day windows credit-risk uses, given how fast
+  regimes shift in this market per our own base-rate-drift observation) + PSI computed weekly on the score
+  distribution and top-3 raw features by IV; trigger an out-of-cycle refit if PSI > 0.25 on the score or
+  base rate before the 30-day mark. Exponential recency-weighting of training samples (w_i = exp(−λ·age_i))
+  as an alternative/complement to hard rolling windows — softer than a cliff-edge window cutoff, lets old
+  data still contribute a little rather than vanishing abruptly. Source: general online-learning concept-
+  drift literature (fading-factor weighting is standard in streaming ML, e.g. surveyed via
+  researchgate.net/publication/220571390 "Learning drifting concepts: example selection vs example weighting").
+
+**7. SIGNAL DECORRELATION — bundler%/top10%/insider% triple-counting problem:**
+- **Tree-based models (GBM) handle correlated features natively** — at each split, the tree picks whichever
+  correlated feature best separates the current node's data; it does NOT sum contributions from all
+  correlated features simultaneously the way a naive hand-weighted linear sum does, so switching from
+  "ad hoc weighted sum" to a GBM largely SOLVES the triple-counting problem as a side effect of the model
+  choice in #1 — this is a genuine advantage of GBM over both hand-weights and plain (non-WOE) logistic
+  regression for us. Caveat: correlated features still split GBM feature-importance credit somewhat
+  arbitrarily between them (importance gets "shared" across correlated proxies), so use permutation
+  importance or SHAP for interpretability rather than raw split-count/gain importance when correlated
+  features are present.
+- **If sticking with a linear/WOE-scorecard approach (recommended path in #3), decorrelation is NOT
+  automatic and must be handled explicitly**: (a) simplest — group correlated features (bundler%/top10%/
+  insider% all = "concentration" group) and cap the group's total log-odds contribution, or keep only the
+  single highest-IV feature per group and drop/shrink the rest; (b) PCA/factor analysis on the concentration
+  sub-block only (not the whole feature set, since mixing e.g. social features with concentration features
+  in one PCA would produce uninterpretable components) — first principal component of {bundler%, top10%,
+  insider%} likely captures ">90% of shared variance as a single 'concentration factor'", feed that single
+  factor into the scorecard instead of three raw features; (c) VIF (variance inflation factor) screening —
+  drop/merge features with VIF > 10 before fitting the linear scorecard, a standard multicollinearity
+  diagnostic. Practical recommendation for us: (a) is the cheapest and most auditable (matches "group
+  correlated signals, cap combined weight" mental model already close to how the team thinks about scoring)
+  — reserve PCA for the concentration sub-block specifically if (a) proves too coarse. Sources:
+  medium.com/@chandradip93 multicollinearity-tree-models; group-wise-PCA-in-boosting concept (apxml.com /
+  general boosting literature); standard VIF>10 threshold (widely-cited applied-stats convention).
+
+**CONCRETE END-TO-END PIPELINE recommendation against our two files:**
+- Labeling: for each alerts.jsonl row, join snapshots.jsonl by token_id, compute outcome at horizon(s)
+  (rugged/graduated/mooned-$10M) using first-crossing-time logic, drop alerts younger than the maturity
+  horizon (immature/right-censored — exclude, don't zero-fill).
+- Controls: for each alert, sample K random non-alerted launches from the same launchpad+week (needs new
+  data collection — currently NOT in either file — this is the single highest-leverage new pipeline to
+  stand up, since every other item here is bounded by this bias until it exists).
+- Model: GBM (LightGBM, class-weighted, monotonic-constraints on features with clear risk direction e.g.
+  higher top10% → monotonically non-decreasing risk) as primary; parallel WOE-scorecard/logistic as the
+  interpretable/auditable model that also directly replaces hand-weights — run both, compare AUPRC.
+- Validation: purged walk-forward over alert_ts, monthly step, report AUPRC + precision@top100 +
+  recall@fixed-FP-budget PER WINDOW (not just averaged) to surface drift directly.
+- Monitoring: weekly PSI on score + top-IV features + realized base rate; refit trigger at PSI>0.25 or
+  30-day cadence, whichever first.
+Sources (wave 13 aggregate): arxiv.org/abs/2602.14860; arxiv.org/pdf/2607.02823; arXiv 1706.09516 (CatBoost);
+Grinsztajn et al. NeurIPS 2022 (tabular vs DL); dl.acm.org/doi/10.5555/3737916.3739316 (AUROC/AUPRC NeurIPS
+2024); arXiv 2601.18696 (recall@FP-budget); cs.cornell.edu/~alexn calibration ICML05; arXiv 2509.09855
+(WOE scorecard framework); listendata.com + planspace.org (WOE=logit-coefficients); github.com/guillermo-
+navas-palencia/optbinning; en.wikipedia.org/wiki/Purged_cross-validation; risklab.ai cross-validation;
+arXiv 2604.15740 (delayed ground truth/outcome maturity); academic.oup.com/ckj (IPTW); sciencedirect.com
+survivor-bias-case-control; coralogix.com/fiddler.ai (PSI); crc.business-school.ed.ac.uk (PSI stat test);
+PMC9333262 (undersample vs weight empirical); Frontiers 2026 10.3389/frai.2026.1871972 (SMOTE pitfalls).
+
+## WAVE 14 — Public alpha-wallet / KOL datasets [done]
+
+**kolscan.io (Solana)** — now **owned by pump.fun** (acquired July 2025, made free). Three pillars: live Trades feed, Tokens, Leaderboard (`kolscan.io/leaderboard`, ranks by realized PnL/ROI/win-rate/volume across time windows). Website-UI only — **no public documented API**; direct fetch 403'd (bot-blocked), addresses visible on-page so scrape-feasible with a headless browser. Related: **kolscan.fun** = a dedicated **Robinhood Chain** KOL tracker (directly relevant, one of our target chains). SolanaTracker mirrors kolscan data via its own API (see below) — likely the easiest API-accessible route to kolscan-equivalent addresses. Sources: blockworks.com/news/pump-fun-kolscan; theblock.co/post/362119; kolscan.fun.
+
+**Dune Analytics — public queries with actual address output** (beyond adam_tehc/pump-fun-alpha-wallets, already known): `dune.com/adam_tehc/pumpfun-wallet-analysor`, `dune.com/dunesleuth/top-pumpfun-traders`, `dune.com/rpat/pump-fun-top-wallets-6h-hold-1min` (bakes in an anti-sniper ≥1min-hold filter), `dune.com/dev2020/solana-alphas` — **most parameterized found**: "Solana alpha wallets across 31 trading bots" with interactive filters (Bot, Balance, Min win ratio, Min tokens bought, Recent activity days, Min scalp ratio). Also `pixelz/solana-alpha-wallet-signals`, `couldbebasic/top-traders`, `couldbebasic/wallet-analyzer-for-copy-traders`, `queries/5114926` ("Alpha Wallets v2"), `holder_bro/alpha-wallets-dashboard-checker`. **Base/Clanker/Zora Dune coverage exists but is token/protocol-level, NOT wallet-ranking** (`openrank/clanker-scores-dashboard`, `luccnx/zora-creator-coins-trading-dashboard`, `clanker_protection_team/awesome-clanker`) — Base smart-money-by-wallet is underdeveloped on Dune vs Solana. **Dune API economics**: query results cached by default (free/cheap if not force-re-run); new pricing is credit-based/compute-proportional; practical free pattern = pin/refresh query on the website UI (free) and scrape the rendered CSV rather than paying for programmatic re-execution. Sources: docs.dune.com/api-reference/overview/billing; dune.com/blog/credits-changing.
+
+**Cielo Finance** — API at `developer.cielo.finance` (portal `build.cielo.finance`): Get Tracked Wallets, Token PnL (per-wallet/token), Aggregated Token PnL endpoints. Docs explicitly describe using the API to **"build custom scripts to automate wallet discovery: fetch trending wallets by Chain, PnL, Winrate, Hold Time, Last Trade"** — i.e. usable as a discovery source, not just lookup. Covers 30+ chains **including Solana AND Base**. Free tier exists (limited alert caps); PnL/discovery endpoints need Builder/Architect/Enterprise (Pro $59/mo, Whale $199/mo) — free tier likely insufficient for bulk seeding. Sources: developer.cielo.finance/reference/gettrackedwallets; docs.cielo.finance/guides/copy-trading/finding-good-wallets; developer.cielo.finance/docs/supported-chains.
+
+**Birdeye** — `GET /trader/gainers-losers` (public leaderboard, also viewable free at birdeye.so/trader-board); `GET /defi/v2/tokens/top_traders` (per-token, sortable by total/unrealized/realized PnL, 2d-90d windows, **Solana only**); `GET /wallet/v2/pnl/multiple` (batch wallet PnL, beta, universal 5 req/sec / 75 req/min cap regardless of tier). Batch/trader endpoints need **Business package+**; basic Lite/Starter tier can't hit them — free bulk pulls not really available, but the UI leaderboard is free to view/scrape manually. Sources: docs.birdeye.so/reference/get-trader-gainers-losers; docs.birdeye.so/reference/get-defi-v2-tokens-top_traders; docs.birdeye.so/reference/get-wallet-v2-pnl-multiple.
+
+**GMGN.ai** — no self-serve public dev-key portal, but GMGN's own official skill spec (github.com/GMGNAI/gmgn-skills, `skills/gmgn-track/SKILL.md`) documents concrete endpoints: `/v1/user/kol` and `/v1/user/smartmoney` (GET, 20 req/s rate limit, params `--chain` required + `--limit` 1-200 + `--side`). **Chains for kol/smartmoney: sol, bsc, base, eth** (robinhood excluded from these two specifically, but included for other track commands — `gmgn.ai/trend?chain=robinhood` confirms Robinhood Chain IS tracked by GMGN generally). Wallet fields: `maker_info.name/.twitter_username/.tags(smart_degen/KOL/fresh)/.tag_rank`; third-party scrapers describe 50+ fields (realized profit, win rate, tx count, holding period, daily-profit history, Twitter, ENS). Requires an API key. **No standalone ranking/leaderboard endpoint documented** — the visible `/rank` UI is separate from these query endpoints, must reconstruct ranking client-side or scrape `/rank`'s internal XHR calls. Apify marketplace has 3rd-party GMGN scrapers (wallet stats, copytrade wallets, token top-traders) if the above proves inaccessible. Best Base "smart-money" source found overall. Sources: raw.githubusercontent.com/GMGNAI/gmgn-skills/main/skills/gmgn-track/SKILL.md; gmgn.ai/trend?chain=robinhood.
+
+**SolanaTracker** — `getPnlV2TopTraders({days, pnlMode, limit})` → `/v2/pnl/leaderboard/top`; `getTopTraders(1,true,'total')` for cross-token top traders; 70+ endpoints incl. token leaderboards + first-buyers-with-PnL. **Free tier: 2,500 requests/month** (paid ~€50/€200/€397/mo). Also mirrors a "Kolscan Leaderboard" page (`solanatracker.io/leaderboard/kolscan`) — likely the easiest API-accessible route to kolscan-equivalent data. Real API, addresses+PnL returned directly, usable free tier for prototyping. Sources: docs.solanatracker.io; madeonsol.com/pricing (third-party pricing summary).
+
+**Base/EVM sources summary**: GMGN (first-class Base chain, same tag system as Solana) is the strongest free-ish Base source; **Nansen Smart Money dashboard** (`app.nansen.ai/smart-money`) covers Base+Arbitrum+Polygon+BNB+Avalanche+Solana with a PnL leaderboard + live DEX feed, but the labeled-wallet list is paywalled at Standard ($99/mo)+/VIP ($1,899/mo); free tier exists but doesn't expose the list. Cielo covers Base natively (paid). Dune has no clear Base equivalent of pump-fun-alpha-wallets yet. **Robinhood Chain**: kolscan.fun + GMGN `chain=robinhood` are the two trackers found; a "stalkchain" family also runs a BSC KOL leaderboard (bnb.stalkchain.com/kol-leaderboard), suggesting per-chain expansion pattern worth watching. **Arc (Circle's stablecoin L1, not our Arc DEX Scan chain)**: no memecoin/KOL tooling exists — it's built for stablecoin/FX settlement, out of scope for smart-money seeding for the foreseeable future. Sources: nansen.ai/post/nansens-new-smart-money-dashboard; app.nansen.ai/smart-money; stalkchain.com/blog/how-to-track-wallets-on-robinhood-chain.
+
+**Bootstrap recipe — refined against findings**: keep **>$10k realized PnL** floor for Solana (validated: top 0.5% per prior research); no Base percentile data exists yet — start with same $10k floor, recalibrate once data collected. **Win-rate >60%** validated directly by GMGN's own `smart_degen` definition (win-rate>0.6 AND PnL-ratio>1) — a live production system, not just a guess, keep it. **NEW: add a minimum trade-count floor (≥15-20 closed trades)** before trusting win-rate/PnL — not in the original recipe; justified by Dune's dev2020/solana-alphas dashboard exposing "Min tokens bought"/"Recent activity days" as first-class filters in practice. Keep the **≥2-independent-source cross-validation** requirement (best defense against one-hit-wonders; kolscan/GMGN/Dune tag-agreement can serve as the ≥2 sources). **NEW: add explicit decay/expiry** — literature says alpha decays and crowds cannibalize it fast ("the second a wallet gets enough followers, its picks become self-fulfilling... late copiers become exit liquidity"); recommend rolling 14-30 day re-evaluation, auto-demote on trailing-30D win-rate <60% or >14 days inactivity. **NEW: flag late-entry copy-trader wallets** (entries consistently AFTER a token's initial volume spike can still show positive PnL by providing exit liquidity to earlier buyers, but have null signal value) — filter via entry-timing-percentile within a token's trade sequence, not PnL alone; several dashboards already implicitly do this via hold-time filters. **Practical pipeline**: (1) SolanaTracker `/v2/pnl/leaderboard/top` (free, 2500 req/mo) + GMGN `/v1/user/smartmoney` (sol/base/eth/bsc) as cheapest API sources; (2) cross-reference against Dune dev2020/adam_tehc CSV exports (free via UI) for Solana; (3) Cielo free-tier for Base supplement; (4) kolscan.fun + GMGN chain=robinhood for Robinhood Chain; (5) apply thresholds above as accept/demote gate.
+
+**Methodology caveat**: most primary sites (dune.com, kolscan.io, gmgn.ai, docs.birdeye.so, docs.solanatracker.io, docs.cielo.finance) 403'd direct WebFetch (bot-blocked) — findings reconstructed from search-result snippets plus one successful direct fetch (GMGN's GitHub-hosted skill spec via raw.githubusercontent.com). Treat exact numeric thresholds (rate limits, pricing) as approximate pending live verification before hard-coding into scanner config.
+
+## WAVE 15 — Telegram alpha-caller track records [partial]
+
+- **Call Analyser** (`@CallAnalyser`/`@CallAnalyserBot`/`@TokenPingBot`, per-chain spinoffs incl. `@CallAnalyserSol`) — bills itself "listing qualified call channels only," posts a numeric Score (seen 31-60/100) per call + mcap/perf stats, ~50k subs. Direct fetch of `t.me/s/CallAnalyserSol` blocked (403) — methodology/API unconfirmed, only inferable via third-party stat sites (telemetr.io, tgstat.com).
+- **No free/scrapeable cross-channel API confirmed.** Closest: github.com/OkoyaUsman/telegram-group-crypto-call-analyzer (open-source TG bot) — monitors groups for contract addresses, computes TP/SL at 12h/24h/48h via the **Birdeye API** (needs your own paid key) — no cross-channel correlation built in.
+- **CoinCodeCap** (signals.coincodecap.com) logs every signal (win/loss/stop-out) to a public auditable Google Sheet — most transparent approach found, but manual/curated, not an API.
+- **"N distinct alpha channels called token X within Y minutes" — no existing tool does this.** Would require independently scraping multiple channels (contract-address regex) + building an in-house timestamp-clustering layer — same shape as the OkoyaUsman bot's ingestion, extended cross-channel. Nothing off-the-shelf; would need to be built, mirroring the smart-money wallet-cluster idea but on message timestamps.
+- **Known pitfalls**: self-reported win-rates are unverifiable noise (channels like Binance Killers claim 97%+ with no independent audit); "qualified-channel" listing networks are themselves gatekept/curated, so any visible leaderboard already excludes failed/exposed pump-and-dump channels — biases any derived base rate upward (survivorship bias, social-side analog of our own alerts.jsonl bias from wave 13).
+- **Assessment: thin.** No ready-made API for channel call-performance; would need custom scraping + backtest infra (similar effort to our existing on-chain backtest tooling) rather than a source callable directly.
+- Sources: flexe.io/blog/crypto-quality-signals-telegram-4-proven-systems; telemetr.io/en/channels/1730427571-callanalyser; tgstat.com/channel/@CallAnalyser/stat; github.com/OkoyaUsman/telegram-group-crypto-call-analyzer; signals.coincodecap.com.
+
+## WAVE 16 — Time-of-day / regime / market-beta normalization [done]
+
+- **Hour-of-day study** (arXiv 2606.08232, "Hour-Aware Adaptive Risk Management for Autonomous Memecoin Trading", Jun 2026) extends our existing Pine-Analytics 14-23 UTC sniper-activity finding: worst hours by mean P&L are **UTC 2 (-16.6%, 40% win-rate), UTC 13 (-22.9%, 0% win-rate), UTC 23 (-15.5%, 62.5% win-rate)**; best are **UTC 14/16/17** (win-rates 42.9%/58.3%/47.4%, mean P&L +4.2%/+12.2%/+7.4% — maps to 10:00-13:00 US Eastern, the US session open). **Caveat from the paper itself**: Mann-Whitney U test on blacklisted-vs-other hours is NOT statistically significant at n=190 (α=0.05) — authors frame it as a candidate microstructure feature needing larger-sample replication, not a confirmed effect. Directly actionable as a "blacklist hour" adjustment but flag the weak-significance caveat.
+- **Day-of-week anomaly**: peer-reviewed evidence exists generically for crypto (PMC10166693, ANN analysis of day-of-week anomaly in cryptocurrencies) — confirms DOW return anomalies are real/studied in crypto broadly, but NOT memecoin-specific; no dedicated memecoin DOW study found beyond the hour-of-day paper.
+- **Market-regime feature**: no single canonical methodology paper, but industry-standard proxy = **BTC Dominance (BTC.D) + Altcoin Season Index** — BTC.D >~60% = risk-off (alts sold first, smaller/more leveraged/narrative-dependent), BTC.D <~55% = risk-on/altseason rotation. Maps cleanly to a simple regime feature: rolling BTC.D level/delta, or rolling BTC/SOL 24h return+volatility as a token-independent control variable.
+- **DXY / stablecoin-mcap-change as leading filters**: NOT directly evidenced in a memecoin-specific context in sources found — speculative/unconfirmed, inferred by analogy to general crypto-macro commentary rather than a dedicated study. Reasonable hypothesis to backtest in-house, not an established finding.
+- **Overall confidence**: hour-of-day = well-evidenced (published paper, concrete numbers, caveated significance); day-of-week + BTC-dominance-regime = well-evidenced generically for crypto but not memecoin-native; DXY/stablecoin angle = thin/speculative.
+- Sources: arxiv.org/pdf/2606.08232; ncbi.nlm.nih.gov/pmc/articles/PMC10166693; tangem.com/en/blog/post/what-is-altseason; bitcoinfoundation.org/news/altcoins/understanding-altcoin-season-in-2026-what-are-altcoin-market-cycles; blog.bitpanda.com/en/bitcoin-vs-altcoins-which-market-phase-dominating-and-what-it-means-investors.
+
+## WAVE 17 — VOLTA bundlemaps staggered-bundle thresholds (retry) [unreachable — exact number not recoverable]
+
+- **Direct site fetch still fails** — `bundlemaps.volta.quest`/`volta.quest` now return HTTP 403 (was 522 previously). **archive.org is blocked at the environment's proxy gateway level** (confirmed via `$HTTPS_PROXY/__agentproxy/status` → `"connect_rejected"`/"gateway answered 403 to CONNECT" for archive.org:443) — a policy denial, not fixable client-side; Wayback is genuinely unreachable this session, not just this attempt.
+- **What surfaced via search-index snippets** of the live page (title "VOLTA Bundle Scanner — The Only Solana Bundle Detector"): classifies bundles into **"same-block" (high risk)** vs **"staggered" (low risk)** buckets; example output `cluster_01: 7 wallets · same-block · risk: HIGH`, `cluster_02: 2 wallets · staggered · LOW`; aggregate "bundle score"/100 (example 72/100). Features: Bundle Detection, Sniper Identification, Wallet Clustering, Coordinated Buy Analysis. Gated behind holding 10,000,000+ VOLTA tokens.
+- **Exact numeric stagger cutoff (the actual ask) NOT recoverable** — no indexed page/cached snippet/secondary source states a precise time-gap or dispersion-% threshold attributable to VOLTA specifically.
+- **Correction to our own prior sourcing**: research-notes-raw.md's existing "bundle 20-25 wallets; stealth-launch 45-90s between buys; disperse across 50-200 fresh wallets each <1%" (wave 8) was attributed to a SET of sources including VOLTA alongside cicere/pumpfun-bundler, Rabnail-SOL, smithii, bananagun, 2 arXiv papers, Helius docs — i.e. that number was a synthesized/aggregate constant, NOT confirmed as VOLTA's own documented cutoff. This retry could not verify VOLTA as its origin.
+- Adjacent non-VOLTA-attributed evidence: basic bundle checkers reportedly bypassed by scripts that "execute a massive buy and immediately distribute across 50 distinct sub-wallets over 3-4 blocks," scammer scripts commonly spin up "20 to 30 clean wallets" — directionally consistent with our existing 20-25/50-200 constants but not VOLTA-sourced.
+- **Conclusion**: functionally unreachable for the exact threshold. Recommend keeping existing 45-90s/20-25 wallets/<1% dispersion constants labeled as "aggregate community consensus, not a single-source-verified VOLTA cutoff."
+- Sources: bundlemaps.volta.quest (search-snippet only, direct fetch 403); volta.quest.
+
+## WAVE 18 — Robinhood chainId verification (read-only repo check) [done]
+
+- **Web verification: Arc and Robinhood Chain are genuinely different chains.** Robinhood Chain = **chainId 4663**, Arbitrum Orbit L2 settling to Ethereum via Nitro, public mainnet launched July 1, 2026 ("The World is Flat" keynote), carries 95 tradeable stock-token RWAs + a zero-fee dYdX-built stock-token DEX. Arc Mainnet = **chainId 5042**, RPC `5042.rpc.thirdweb.com`, explorer `arcscan.app` — a small separate chain (~225 tokens, ~$4k/24h volume per repo notes), own Railway-hosted backend (arcdexscan.com). No source links Arc to Robinhood Chain/Arbitrum Orbit — unrelated, much smaller/younger chain. Confirmed genuinely distinct: different chainId, RPC, purpose. Sources: blog.thirdweb.com/robinhood-launches-its-own-l2-blockchain-on-arbitrum-3; eco.com/support/en/articles/15859739; docs.robinhood.com/chain/cross-chain-messaging; bitget.com/news/detail/12560605498256.
+- **Exact repo config (via Grep/Read, all confirmed, read-only — no files edited)**: `arc/scan.py:1,4,181` and `arc/README.md:1` — Arc Mainnet chainId 5042, RPC `5042.rpc.thirdweb.com`, explorer arcscan.app; scanner is **API-only, no RPC used** (`arc/README.md:78`). `vlad/rpc.py:12` — Robinhood Chain RPC = a QuickNode endpoint (`dry-lively-research.robinhood-mainnet.quiknode.pro/...`), comment line 1 confirms "Robinhood Chain / vlad.fun". `vlad/README.md:4,18-19` — states chainId **4663**, same QuickNode RPC, explorer `robinhoodchain.blockscout.com`. `pons/api.py:16-20` — `RPC = "https://rpc.mainnet.chain.robinhood.com"` (official endpoint, comment notes it's "from the pons bundle"), plus `FACTORY = "0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB"`, `WETH = "0x0Bd7D308f8E1639FAb988df18A8011f41EAcAD73"`. Top-level `README.md:134-137` — "Both launchpads are on Robinhood Chain (chainId 4663). The public rpc.mainnet.chain.robinhood.com rejects urllib (403); the code uses a QuickNode endpoint pulled from the vlad.fun bundle." `README.md:73` — "arc/ — Arc DEX Scan (Arc Mainnet, chainId 5042)". `flap/scan.py` and `pons/alert_pro.py` reference the same vlad QuickNode RPC + Blockscout — consistent with pons/flap/vlad all genuinely on Robinhood Chain, distinct from Arc.
+- **Mismatch/ambiguity assessment: NONE found.** Arc (5042) and Robinhood Chain (4663) are correctly kept separate across the repo — `arc/` never references Robinhood RPC/explorer/chainId, and `pons/`/`flap/`/`vlad/` never reference Arc's thirdweb RPC/arcscan.app. **One minor non-bug observation**: no code file stores chainId 4663 as an actual constant/assertion — it only appears in README/docstring comments; pons/flap/vlad identify the chain purely by RPC URL string + Blockscout domain, not by checking a numeric chainId, so nothing in code would catch a silent RPC-provider chain-drift if the QuickNode endpoint ever silently repointed to a different chain. Worth a future defensive check (e.g. `eth_chainId` assertion at startup) but not an active bug. **This closes the open verification item** tracked at research-and-build-plan.md:33-34 and research-notes-raw.md:194-196.
+
+── RESEARCH STATUS: 18 waves done (PART 0 complete — all 3 primary angles + all 4 queued angles run).
+Remaining open items (not full research gaps, just follow-ups noted above): VOLTA exact stagger threshold
+unreachable (proxy blocks archive.org + site 403s); Clanker/honeypot.is/GoPlus full docs pages 403'd to
+automated fetch (need human/browser check); Virtuals Base AgentFactoryV3/Unicorn exact contract address;
+GoPlus/honeypot.is coverage of Robinhood Chain (4663) unconfirmed. NO decisions made — still source material.
