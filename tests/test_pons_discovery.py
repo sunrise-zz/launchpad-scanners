@@ -478,6 +478,84 @@ def test_a_launch_older_than_the_watch_window_is_registered_but_never_alerts(pon
     assert not undated.is_active(now), "an undated coin has no age to filter on"
 
 
+def test_sweep_drops_stale_coins_but_keeps_recent_and_pending(pons):
+    """The live scanner runs for weeks, so completed watch windows must release
+    their swap-derived buyer dictionaries. A pending confirmation is the one
+    exception: it must survive past the window long enough to resolve."""
+    now = time.time()
+
+    def coin(token_digit, age_secs):
+        return pons.CoinState(
+            token="0x" + token_digit * 40,
+            pool="0x" + "f" * 40,
+            launch_block=1,
+            deployer="0x" + "d" * 40,
+            symbol="T",
+            launched_at=now - age_secs,
+        )
+
+    recent = coin("1", 60)
+    stale = coin("2", pons.ACTIVE_SECS + 1)
+    pending = coin("3", pons.ACTIVE_SECS + 1)
+    pending.pending_since = now - 30
+    coins = {c.token: c for c in (recent, stale, pending)}
+
+    removed = pons.prune_coins(coins, now)
+
+    assert removed == [stale.token]
+    assert set(coins) == {recent.token, pending.token}
+
+
+def test_sweep_drops_a_pending_confirmation_after_it_resolves(pons):
+    """`pending_since` remains as history after the hold resolves; confirmed is
+    the state transition that says the CoinState no longer needs retention."""
+    now = time.time()
+    resolved = pons.CoinState(
+        token="0x" + "4" * 40,
+        pool="0x" + "f" * 40,
+        launch_block=1,
+        deployer="0x" + "d" * 40,
+        symbol="DONE",
+        launched_at=now - pons.ACTIVE_SECS - 1,
+    )
+    resolved.pending_since = now - 60
+    resolved.confirmed = True
+    coins = {resolved.token: resolved}
+
+    assert pons.prune_coins(coins, now) == [resolved.token]
+    assert coins == {}
+
+
+def test_pruned_launch_is_not_registered_again_and_deployer_history_survives(pons):
+    """Pruning may release heavy CoinState objects, but a repeated discovery
+    record must remain a no-op and its deployer launch count must not shrink."""
+    now = time.time()
+    token = "0x" + "4" * 40
+    deployer = "0x" + "d" * 40
+    record = {
+        "token": token,
+        "pool": "0x" + "f" * 40,
+        "blockNumber": 1,
+        "deployer": deployer,
+        "symbol": "OLD",
+        "launchedAt": dt.datetime.fromtimestamp(
+            now - pons.ACTIVE_SECS - 1, dt.timezone.utc).isoformat(),
+    }
+    coins = {}
+    dep_tokens = {deployer: set()}
+    registered_tokens = set()
+
+    assert pons.register_launch_records(
+        [record], coins, dep_tokens, registered_tokens, now) == 1
+    assert pons.prune_coins(coins, now) == [token]
+    assert dep_tokens[deployer] == {token}
+
+    assert pons.register_launch_records(
+        [record], coins, dep_tokens, registered_tokens, now) == 0
+    assert coins == {}
+    assert dep_tokens[deployer] == {token}
+
+
 def test_an_exact_block_timestamp_is_never_replaced_by_the_estimate(pons_api, stub_rpc):
     """The height-based estimate is a fallback for when the timestamp lookup
     fails, not a substitute for it. launchedAt is what the outcome tracker

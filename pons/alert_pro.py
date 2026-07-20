@@ -416,7 +416,46 @@ class CoinState:
         """
         if self.dead or self.confirmed or not self.launched_at:
             return False
-        return (now - self.launched_at) <= ACTIVE_SECS or self.pending_since is not None
+        return self.should_retain(now)
+
+    def should_retain(self, now):
+        """Whether pruning this state could lose an eligible or pending coin."""
+        if self.launched_at is None:
+            return True
+        unresolved = self.pending_since is not None and not (self.confirmed or self.dead)
+        return (now - self.launched_at) <= ACTIVE_SECS or unresolved
+
+
+def prune_coins(coins, now):
+    """Drop coin state after its alert window, except unresolved confirmations."""
+    stale = [token for token, coin in coins.items() if not coin.should_retain(now)]
+    for token in stale:
+        del coins[token]
+    return stale
+
+
+def register_launch_records(records, coins, dep_tokens, registered_tokens, now):
+    """Register unseen discovery records while retaining compact dedup history."""
+    n = 0
+    for record in records:
+        token = record["token"].lower()
+        if (token in registered_tokens
+                or not record.get("pool")
+                or not record.get("blockNumber")):
+            continue
+        launched_at = parse_ts(record.get("launchedAt")) or now
+        deployer = (record.get("deployer") or "").lower()
+        coins[token] = CoinState(
+            token, record["pool"], record["blockNumber"],
+            deployer, record.get("symbol"), launched_at,
+            pair_token=record.get("pairToken"),
+            initial_buy_wei=record.get("initialBuyAmount"),
+            restrictions_end_block=record.get("restrictionsEndBlock"),
+        )
+        dep_tokens.setdefault(deployer, set()).add(token)
+        registered_tokens.add(token)
+        n += 1
+    return n
 
 
 def launch_features(c, dep_launches):
@@ -724,7 +763,8 @@ def main():
           f"discovery={args.discovery_source}  "
           f"-> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
 
-    coins = {}          # token -> CoinState
+    coins = {}          # active/recent token -> CoinState
+    registered_tokens = set()  # compact process-lifetime dedup after CoinState pruning
     near_sent = {}      # token -> ts
     sampler = controls.ControlSampler("pons.family", k=args.controls_k,
                                       bucket_s=args.controls_bucket_s,
@@ -784,33 +824,8 @@ def main():
 
     def register_launches():
         try:
-            n = 0
-            for L in api.latest():
-                tok = L["token"].lower()
-                if tok in coins or not L.get("pool") or not L.get("blockNumber"):
-                    continue
-                n += 1
-                # A missing/unparseable launchedAt used to leave launched_at=None,
-                # and the active filter (needs launched_at truthy) then never scanned
-                # the coin — a silent CONFIRMED miss. Fall back to now.
-                #
-                # But "now" is a lie for anything a drain surfaced: it dates an
-                # hours-old launch as new, putting it inside the watch window
-                # where it can alert. The RPC path therefore never returns None
-                # here — api._latest_onchain() estimates from block height when
-                # the timestamp lookup fails (#4). This fallback is now reached
-                # only by the legacy HTTP source, which is dormant (pons.family
-                # is NXDOMAIN) and never drains, so a stale record can't reach
-                # it in bulk. If that source is ever revived, it needs the same
-                # treatment before it can be trusted with an outage backlog.
-                launched_at = parse_ts(L.get("launchedAt")) or time.time()
-                dep = (L.get("deployer") or "").lower()
-                coins[tok] = CoinState(tok, L["pool"], L["blockNumber"],
-                                       dep, L.get("symbol"), launched_at,
-                                       pair_token=L.get("pairToken"),
-                                       initial_buy_wei=L.get("initialBuyAmount"),
-                                       restrictions_end_block=L.get("restrictionsEndBlock"))
-                dep_tokens[dep].add(tok)   # set add — no double count on re-seen launches
+            n = register_launch_records(
+                api.latest(), coins, dep_tokens, registered_tokens, time.time())
             if n:
                 # Discovery going quiet is what the 2026-07-18 outage looked
                 # like from the outside; make it visible in the log. (#6 turns
@@ -1058,6 +1073,10 @@ def main():
                 threading.Thread(target=refresh_eth, daemon=True).start()
             register_launches()
             update_swaps(now)
+            pruned = prune_coins(coins, now)
+            if pruned:
+                print(f"[{time.strftime('%H:%M:%S')}] -{len(pruned)} stale "
+                      f"({len(coins)} tracked)", flush=True)
             check_neargrad(now)
             if args.marketing_feed and now - last_mkt[0] > 75:  # 2 calls per pass, 60 rpm cap
                 check_marketing(now)
