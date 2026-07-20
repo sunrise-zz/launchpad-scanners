@@ -28,6 +28,9 @@ THRESHOLDS = {
     "virtuals": 240,
     "arc": 300,
     "bags": 240,
+    # Scheduled every six hours. A missed run is visible before the next one
+    # should have completed.
+    "pons-reputation": 28_800,
 }
 
 
@@ -81,7 +84,7 @@ def acknowledge(state, event):
 
 
 def discover_targets(launch_agents_dir, repo_root, thresholds, default_threshold=300):
-    """Build the watch list from installed `com.sunrise.*-scanner` plists."""
+    """Build the watch list from installed scanner and collector plists."""
     targets = []
     try:
         names = sorted(os.listdir(launch_agents_dir))
@@ -95,8 +98,13 @@ def discover_targets(launch_agents_dir, repo_root, thresholds, default_threshold
         except (OSError, ValueError):
             continue
         label = config.get("Label")
-        prefix, suffix = "com.sunrise.", "-scanner"
-        if not isinstance(label, str) or not label.startswith(prefix) or not label.endswith(suffix):
+        prefix = "com.sunrise."
+        suffix = next(
+            (candidate for candidate in ("-scanner", "-collector")
+             if isinstance(label, str) and label.endswith(candidate)),
+            None,
+        )
+        if not isinstance(label, str) or not label.startswith(prefix) or suffix is None:
             continue
         scanner = label[len(prefix):-len(suffix)]
         args = config.get("ProgramArguments") or []
@@ -107,7 +115,17 @@ def discover_targets(launch_agents_dir, repo_root, thresholds, default_threshold
         if not os.path.isabs(script):
             workdir = config.get("WorkingDirectory") or os.fspath(repo_root)
             script = os.path.join(workdir, script)
-        heartbeat = os.path.join(os.path.dirname(script), "data", "heartbeat.json")
+        heartbeat = None
+        try:
+            heartbeat_arg = args.index("--heartbeat")
+            heartbeat = args[heartbeat_arg + 1]
+        except (ValueError, IndexError):
+            pass
+        if heartbeat is None:
+            heartbeat = os.path.join(os.path.dirname(script), "data", "heartbeat.json")
+        elif not os.path.isabs(heartbeat):
+            workdir = config.get("WorkingDirectory") or os.fspath(repo_root)
+            heartbeat = os.path.join(workdir, heartbeat)
         targets.append(Target(
             label=label,
             scanner=scanner,
@@ -183,7 +201,7 @@ def main():
             return True, "dry-run"
         return telegram.send(text, token, chat_id)
 
-    print("scanner watchdog  targets=installed com.sunrise.*-scanner LaunchAgents  "
+    print("scanner watchdog  targets=installed scanner/collector LaunchAgents  "
           f"interval={args.interval:.0f}s  -> "
           f"{'DRY-RUN' if args.dry_run else 'Telegram'}", flush=True)
     runtime_state = {}

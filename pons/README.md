@@ -22,7 +22,7 @@ history — discovery decodes events now, exactly like vlad.fun always did.
 |---|---|
 | `GET /api/pons-launches/latest` | ~~new-coin feed~~ — replaced by `TokenLaunched` |
 | `GET /api/pons-launches/recent-buys` | 100 most-active tokens with `graduationProgressPct`, `pairedPrincipalEth` — the **momentum feed** behind NEAR-GRAD (dead while the domain is) |
-| `GET /api/pons-launches/graduations` | graduated tokens + timestamps (success labels) |
+| `GET /api/pons-launches/graduations` | ~~success labels~~ — replaced by the first on-chain 4.2 WETH reserve crossing |
 | `GET /api/pons-launches` | full list (~15MB, current outcomes) |
 | `GET /api/noxa-market?token=` | per-token market state (reserves, latest buy) |
 
@@ -102,9 +102,38 @@ What separates winners from losers (medians, first 5 min):
 Non-findings (tested, weak): initial buy size, has_description/logo (both ~1.0),
 bundle_max (same-block multi-buyer is crowd rush here, not insider bundling).
 
-`data/smart_wallets.json`: 1,267 wallets that early-bought (≤3 min) ≥2 different
-later-graduated coins — the top one entered 41 winners. Used as a live insight
+`data/smart_wallets.json`: 7,275 wallets that early-bought (≤3 min) ≥2 different
+later-graduated coins — the top one entered 188 winners. Used as a live insight
 (not a hard filter).
+
+## Graduation and reputation refresh
+
+`reputation.py` replaces the dead graduation and full-launch endpoints. It
+reconstructs launches from the two evidenced Pons factory generations, follows
+the Pons pools' Uniswap V3 `Swap` logs, and records the first edge where the
+pool's WETH balance crosses 4.2 WETH. There is no separate graduation event in
+the crossing transaction, and the balance can later fall below the threshold,
+so the persisted first edge is the marker.
+
+The first run uses the last committed API label as a trusted baseline, snapshots
+non-graduated pool balances at that block, then backfills every block through
+head. Subsequent runs resume from `data/reputation_state.json`. It atomically
+updates `graduations.json`, rebuilds early-buyer weights in
+`smart_wallets.json`, rebuilds per-deployer counts in `deployer_grads.json`,
+and writes `data/reputation_heartbeat.json` only after a complete successful
+refresh.
+
+Run it manually every six hours with `python3 pons/collect.py`, or install
+`com.sunrise.pons-reputation-collector.plist` for the six-hour schedule:
+
+```bash
+cp pons/com.sunrise.pons-reputation-collector.plist ~/Library/LaunchAgents/
+launchctl bootstrap gui/$(id -u) \
+  ~/Library/LaunchAgents/com.sunrise.pons-reputation-collector.plist
+```
+
+The scanner watchdog discovers the installed `*-collector` job and reports it
+DOWN after eight hours without a successful heartbeat.
 
 ## Scanner logic (`scan.py`)
 
@@ -120,7 +149,8 @@ Stateful. Each poll records `(t, pairedETH, progress%)` per token, then:
 | file | purpose |
 |---|---|
 | `api.py` | launch discovery (`TokenLaunched` → `latest()`), symbol lookup, + the legacy REST endpoints / factory consts |
-| `collect.py` | snapshot launches + graduations, print base-rate dynamics, write `deployer_grads.json` |
+| `reputation.py` | on-chain graduation backfill + smart-wallet/deployer refresh |
+| `collect.py` | compatibility entrypoint for `reputation.py` |
 | `scan.py` | live scanner — poll momentum feed, compute velocity, rank, alert (terminal) |
 | `alert.py` | 1s loop → Telegram — velocity-only CLIMBING / NEAR-GRAD (noisier, superseded) |
 | `alert_pro.py` | **PRO: multi-factor CONFIRMED → Telegram** — on-chain factors + insights (use this) |
@@ -161,7 +191,7 @@ With no credentials it auto-falls back to dry-run (prints the messages).
 ## Run
 
 ```bash
-python3 analysis/pons/collect.py    # snapshot + reputation table (run first)
+python3 pons/collect.py             # graduation + reputation refresh
 python3 analysis/pons/scan.py       # live graduation-momentum watchlist
 python3 analysis/pons/scan.py --once --interval 12
 ```

@@ -79,18 +79,32 @@ def test_targets_come_from_installed_scanner_launchagents(watchdog, tmp_path):
     install("com.sunrise.arc-scanner", "arc/scan.py")
     install("com.sunrise.bags-scanner", "bags/scan.py")
     install("com.sunrise.tracker", "tracker/track.py")
+    with open(agents / "com.sunrise.pons-reputation-collector.plist", "wb") as f:
+        plistlib.dump({
+            "Label": "com.sunrise.pons-reputation-collector",
+            "WorkingDirectory": str(repo),
+            "ProgramArguments": [
+                "/opt/homebrew/bin/python3", "-u", "pons/reputation.py",
+                "--heartbeat", "pons/data/reputation_heartbeat.json",
+            ],
+        }, f)
 
     targets = watchdog.discover_targets(
-        agents, repo, {"pons": 120, "arc": 300, "bags": 240})
+        agents, repo, {
+            "pons": 120, "arc": 300, "bags": 240,
+            "pons-reputation": 28_800,
+        })
 
     assert [(t.label, t.scanner, t.threshold) for t in targets] == [
         ("com.sunrise.arc-scanner", "arc", 300),
         ("com.sunrise.bags-scanner", "bags", 240),
+        ("com.sunrise.pons-reputation-collector", "pons-reputation", 28_800),
         ("com.sunrise.pons-scanner", "pons", 120),
     ]
     assert [os.fspath(t.heartbeat) for t in targets] == [
         os.fspath(repo / "arc/data/heartbeat.json"),
         os.fspath(repo / "bags/data/heartbeat.json"),
+        os.fspath(repo / "pons/data/reputation_heartbeat.json"),
         os.fspath(repo / "pons/data/heartbeat.json"),
     ]
 

@@ -6,10 +6,11 @@ that is successfully ingesting its primary feed. Each scanner writes
 valid empty response still counts: quiet launchpads such as Arc must not look
 dead just because no new token launched.
 
-Targets are discovered from the installed
-`~/Library/LaunchAgents/com.sunrise.*-scanner.plist` files. The script uses the
-configured scanner path to locate its heartbeat, so Arc and Bags are included
-without a second hard-coded target list.
+Targets are discovered from installed `com.sunrise.*-scanner` and
+`com.sunrise.*-collector` LaunchAgents. The script uses the configured program
+path to locate the default heartbeat, or honors an explicit `--heartbeat`
+argument. This includes scheduled collectors without a second hard-coded target
+list.
 
 ## Staleness thresholds
 
@@ -21,6 +22,7 @@ without a second hard-coded target list.
 | virtuals | ~30s, BASE created-at feed | 4 min |
 | arc | ~30s, Railway launches feed | 5 min |
 | bags | ~30s, GMGN Trenches feed | 4 min |
+| pons-reputation | every 6h, on-chain graduation backfill | 8 h |
 
 Notifications are edge-triggered. A long outage sends one DOWN message, then
 nothing until one UP message after ingestion recovers. Failed Telegram sends

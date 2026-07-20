@@ -27,6 +27,8 @@ Real-world precision ~30% (41% out-of-time), ~55× the 0.54% base rate, fires
 ~44s after launch (graduation ~90 min later). See `pons/README.md`.
 
 - `alert_pro.py` — **the live scanner** (multi-factor 🎯 CONFIRMED + 🔥 NEAR-GRAD → Telegram)
+- `reputation.py` / `collect.py` — scheduled on-chain graduation, smart-wallet,
+  and deployer-reputation refresh
 - `backtest_multifactor.py`, `collect_onchain.py` — how the rule was found
 - `scan.py` / `alert.py` — earlier velocity-only versions
 
@@ -73,7 +75,7 @@ the scores actually predicted pumps — the data for refitting score weights.
 
 ### `watchdog/` — feed-ingest health monitoring
 Every installed scanner writes an atomic heartbeat only after its primary feed
-responds successfully. The watchdog discovers `com.sunrise.*-scanner`
+responds successfully. The watchdog discovers scanner and scheduled collector
 LaunchAgents, sends one Telegram DOWN edge when a heartbeat goes stale and one
 UP edge on recovery, and exposes its own heartbeat. See `watchdog/README.md`.
 
@@ -97,7 +99,7 @@ own `isLowRisk` (FAC) flag. See `flap/README.md`.
 
 ```bash
 # pons
-python3 pons/collect.py            # snapshot + reputation table
+python3 pons/collect.py            # on-chain graduation + reputation refresh
 python3 pons/alert_pro.py --dry-run   # multi-factor scanner, print alerts
 
 # vlad

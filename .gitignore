@@ -23,6 +23,8 @@ tracker/data/
 pump/data/alerted_mints.txt
 pump/data/.seeded
 pons/data/discovery_cursor.json
+pons/data/reputation_state.json
+pons/data/reputation_heartbeat.json
 **/data/heartbeat.json
 watchdog/data/state.json
 *.tmp

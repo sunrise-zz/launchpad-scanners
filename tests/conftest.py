@@ -160,6 +160,11 @@ def analyst():
     return _load("agent_analyst", "agent/analyst.py")
 
 
+@pytest.fixture(scope="session")
+def reputation():
+    return _load("pons_reputation", "pons/reputation.py")
+
+
 @pytest.fixture
 def load_pons_api():
     """Build a *new* pons/api.py instance on demand.
