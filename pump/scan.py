@@ -47,11 +47,13 @@ sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram + alertfmt + o
 import alertfmt  # noqa: E402
 import controls  # noqa: E402
 import gmgn  # noqa: E402
+import health  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 
 DATA = os.path.join(HERE, "data")
 os.makedirs(DATA, exist_ok=True)
+HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 
 API = "https://frontend-api-v3.pump.fun"
 PUMP_URL = "https://pump.fun/coin/"
@@ -297,7 +299,7 @@ def main():
         nonlocal first_run
         nsfw = "true" if args.include_nsfw else "false"
         feed = api_get(f"coins?offset=0&limit=100&sort=last_trade_timestamp&order=DESC&includeNsfw={nsfw}")
-        if feed is None:
+        if not health.is_record_list(feed):
             return
         unalerted = []       # this poll's control population (#9)
         for c in feed:
@@ -346,6 +348,7 @@ def main():
             # fell through every gate: a launch we saw and did not alert on
             unalerted.append((c, co, mcap))
 
+        health.touch(HEARTBEAT, "pump", now=now, detail={"items": len(feed)})
         sample_control(now, unalerted)
 
         if first_run:

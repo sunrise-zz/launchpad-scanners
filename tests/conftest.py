@@ -145,6 +145,16 @@ def ethprice():
     return _load("pons_ethprice", "pons/ethprice.py")
 
 
+@pytest.fixture(scope="session")
+def health():
+    return _load("pons_health", "pons/health.py")
+
+
+@pytest.fixture(scope="session")
+def watchdog():
+    return _load("scanner_watchdog", "watchdog/watchdog.py")
+
+
 @pytest.fixture
 def load_pons_api():
     """Build a *new* pons/api.py instance on demand.

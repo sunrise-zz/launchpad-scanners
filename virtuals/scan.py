@@ -47,11 +47,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram sender + alert format
 import alertfmt  # noqa: E402
 import controls  # noqa: E402
+import health  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 
 DATA = os.path.join(HERE, "data")
 os.makedirs(DATA, exist_ok=True)
+HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 
 API = "https://api2.virtuals.io/api"
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
@@ -77,9 +79,10 @@ def api_get(path, **params):
 def list_virtuals(chain, sort, page_size=25, **extra):
     d = api_get("virtuals", **{"filters[chain]": chain, "sort": sort,
                                "pagination[pageSize]": page_size, **extra})
-    if d is None:                 # API failure — distinguish from a genuine empty list
+    if not isinstance(d, dict):
         return None
-    return d.get("data") or []
+    rows = d.get("data")
+    return rows if isinstance(rows, list) else None
 
 
 def log_event(kind, **kw):
@@ -288,7 +291,7 @@ def main():
 
     def poll_new(chain, now):
         rows = list_virtuals(chain, "createdAt:desc")
-        if rows is None:            # API failure — do NOT let this count as "seeded"
+        if not health.is_record_list(rows):  # failure/malformed — do not count as seeded or healthy
             return False
         for r in rows:
             aid = r.get("id")
@@ -304,6 +307,10 @@ def main():
             else:
                 log_event("launch", id=aid, chain=r.get("chain"), sym=r.get("symbol"))
                 print(f"[{time.strftime('%H:%M:%S')}] new agent {r.get('symbol')} ({chain})", flush=True)
+        if chain == "BASE":         # primary feed; dormant Solana must not mask a BASE outage
+            health.touch(
+                HEARTBEAT, "virtuals", now=now,
+                detail={"chain": chain, "items": len(rows)})
         return True
 
     def refresh_cohort(now):

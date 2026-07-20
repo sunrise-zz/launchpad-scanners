@@ -47,11 +47,13 @@ import api  # noqa: E402
 import controls  # noqa: E402
 import ethprice  # noqa: E402
 import gmgn  # noqa: E402
+import health  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 from rpc import rpc, rpc_batch  # noqa: E402  (quiknode Robinhood mainnet)
 
 DATA = os.path.join(HERE, "data")
+HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 BLOCK_SEC = 0.1
 SWAP_TOPIC = "0xc42079f94a6350d7e6235f29174924f928cc2ac818eb64fed8004e115fbcca67"
 WETH = "0x0bd7d308f8e1639fab988df18a8011f41eacad73"
@@ -824,8 +826,14 @@ def main():
 
     def register_launches():
         try:
+            records = api.latest()
+            if not health.is_record_list(records):
+                raise ValueError("latest returned a malformed response")
             n = register_launch_records(
-                api.latest(), coins, dep_tokens, registered_tokens, time.time())
+                records, coins, dep_tokens, registered_tokens, time.time())
+            health.touch(
+                HEARTBEAT, "pons",
+                detail={"source": args.discovery_source, "items": len(records)})
             if n:
                 # Discovery going quiet is what the 2026-07-18 outage looked
                 # like from the outside; make it visible in the log. (#6 turns

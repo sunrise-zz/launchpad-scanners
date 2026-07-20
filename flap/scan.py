@@ -49,12 +49,14 @@ sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram sender
 import alertfmt  # noqa: E402
 import controls  # noqa: E402
 import gmgn  # noqa: E402
+import health  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 from rpc import rpc  # noqa: E402
 
 DATA = os.path.join(HERE, "data")
 os.makedirs(DATA, exist_ok=True)
+HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 
 TRANSFER = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
 ZERO32 = "0x" + "0" * 64
@@ -390,6 +392,7 @@ def main():
         """One pass: new mints + cohort transfer activity, chunk-safe."""
         head = int(rpc("eth_blockNumber", []), 16)
         if head <= cursor[0]:
+            health.touch(HEARTBEAT, "flap", now=now, detail={"head": head})
             return
         frm = cursor[0] + 1
         # never let a stall (rpc outage) force a giant catch-up scan
@@ -427,6 +430,7 @@ def main():
                         if recip != "0x" + "0" * 40:
                             t.recips.add(recip)
         cursor[0] = head
+        health.touch(HEARTBEAT, "flap", now=now, detail={"head": head})
 
     def sample_control(now):
         """Take one launch we have NOT alerted on as a control (#9).

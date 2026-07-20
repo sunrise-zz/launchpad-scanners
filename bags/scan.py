@@ -43,11 +43,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram + alertfmt + gmgn + outcomes
 import alertfmt  # noqa: E402
 import gmgn  # noqa: E402
+import health  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 
 DATA = os.path.join(HERE, "data")
 os.makedirs(DATA, exist_ok=True)
+HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 
 # launchpad_platform request keys for GMGN trenches (allow-list; empty = nothing).
 # pons / flap / flap_stocks are EXCLUDED on purpose — those launchpads are already
@@ -246,6 +248,16 @@ def main():
         if not d:
             print(f"[{time.strftime('%H:%M:%S')}] trenches fetch failed", flush=True)
             return
+        sections = sum(isinstance(d.get(sec), list)
+                       for sec in ("new_creation", "pump", "completed"))
+        if not sections:
+            print(f"[{time.strftime('%H:%M:%S')}] trenches response malformed", flush=True)
+            return
+        if any(isinstance(d.get(sec), list)
+               and not health.is_record_list(d[sec])
+               for sec in ("new_creation", "pump", "completed")):
+            print(f"[{time.strftime('%H:%M:%S')}] trenches rows malformed", flush=True)
+            return
         # response section for near_completion is named "pump"
         for sec in ("new_creation", "pump", "completed"):
             items = d.get(sec)
@@ -343,6 +355,9 @@ def main():
                     dispatch(body, f"TRENCH GRAD {it.get('symbol')}", buttons=links(it),
                              record=record_for(it, "TRENCH GRAD", score))
             seeded.add(sec)
+        health.touch(
+            HEARTBEAT, "bags", now=now,
+            detail={"sections": sections})
         for a_ in [a_ for a_, hh in hol_hist.items() if hh and now - hh[-1][0] > 7200]:
             del hol_hist[a_]
 

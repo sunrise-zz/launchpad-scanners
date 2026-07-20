@@ -634,3 +634,12 @@ def test_legacy_http_source_is_selectable(pons_api, monkeypatch, stub_rpc):
     monkeypatch.setattr(pons_api, "DISCOVERY_SOURCE", "http")
     monkeypatch.setattr(pons_api, "_latest_http", lambda: sentinel)
     assert pons_api.latest() is sentinel
+
+
+def test_legacy_http_source_rejects_malformed_feed_envelope(
+        pons_api, monkeypatch):
+    monkeypatch.setattr(pons_api, "get", lambda *args, **kwargs: {"error": "upstream"})
+    assert pons_api._latest_http() is None
+
+    monkeypatch.setattr(pons_api, "get", lambda *args, **kwargs: [])
+    assert pons_api._latest_http() == []

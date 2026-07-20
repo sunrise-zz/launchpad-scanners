@@ -46,11 +46,13 @@ import urllib.request
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram + alertfmt
 import alertfmt  # noqa: E402
+import health  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 
 DATA = os.path.join(HERE, "data")
 os.makedirs(DATA, exist_ok=True)
+HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 
 BASE = "https://web-production-efe27.up.railway.app"
 EXPLORER = "https://arcscan.app/token/"
@@ -196,7 +198,13 @@ def main():
 
     def poll_launches(now):
         d = api_get("launches", limit=30)
-        for L in (d or {}).get("launches", []):
+        if d is None:
+            return
+        launches = d.get("launches", [])
+        if not health.is_record_list(launches):
+            print("  api error launches: malformed response", flush=True)
+            return
+        for L in launches:
             addr = (L.get("token") or "").lower()
             if not addr or addr in tracked:
                 continue
@@ -210,6 +218,9 @@ def main():
             if not pre:
                 log_event("launch", addr=addr, sym=L.get("symbol"), deployer=L.get("deployer"))
                 print(f"[{time.strftime('%H:%M:%S')}] new launch {L.get('symbol')} ({addr[:10]})", flush=True)
+        health.touch(
+            HEARTBEAT, "arc", now=now,
+            detail={"items": len(launches)})
 
     def scan_cohort(now):
         for addr in list(tracked):

@@ -373,7 +373,8 @@ def _latest_onchain():
 
 
 def _latest_http():
-    return get(EP_LATEST)
+    rows = get(EP_LATEST)
+    return rows if isinstance(rows, list) else None
 
 
 def latest():

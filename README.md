@@ -71,6 +71,12 @@ Records every alert, follows each coin's price at 5m…48h, and reports whether
 the scores actually predicted pumps — the data for refitting score weights.
 `report.py` slices returns by platform / tier / score band. See `tracker/README.md`.
 
+### `watchdog/` — feed-ingest health monitoring
+Every installed scanner writes an atomic heartbeat only after its primary feed
+responds successfully. The watchdog discovers `com.sunrise.*-scanner`
+LaunchAgents, sends one Telegram DOWN edge when a heartbeat goes stale and one
+UP edge on recovery, and exposes its own heartbeat. See `watchdog/README.md`.
+
 ### `arc/` — Arc DEX Scan (Arc Mainnet, chainId 5042)
 Small, young chain. Open Railway backend with a `/launches` feed + `/token`
 enrichment. 🐣 EARLY traction + 🚀 LAUNCHED (migration) tiers, API-only. See
