@@ -6,9 +6,10 @@ sources live in the other docs; this is what to act on.
 
 ## Read order
 1. **This file** — state, principles, prioritized backlog.
-2. `docs/research-and-build-plan.md` — the phased pipeline (PART 0-6 + 5b + updates).
-3. `docs/research-notes-raw.md` — 24 research waves (external 1-19, OUR-platform empirical 20-24).
-4. `docs/signal-research-2026-07.md` — the first synthesized signal doc.
+2. `docs/data-availability-matrix.md` — measured per-scanner coverage; mandatory gate for new signals.
+3. `docs/research-and-build-plan.md` — the phased pipeline (PART 0-6 + 5b + updates).
+4. `docs/research-notes-raw.md` — 24 research waves (external 1-19, OUR-platform empirical 20-24).
+5. `docs/signal-research-2026-07.md` — the first synthesized signal doc.
 
 ---
 
@@ -107,7 +108,8 @@ right now only pons emits raw features, so only pons is refittable.
      RPC-level `eth_call` simulated buy/sell, which needs no third-party coverage at all.
 
 ### TIER B — prerequisite infra (do before trusting any weight changes)
-7. **Per-scanner data-availability matrix** — CRITICAL. Map each signal → can each scanner compute it today?
+7. **Per-scanner data-availability matrix** — ✅ SHIPPED. See `docs/data-availability-matrix.md`; it is the
+   mandatory gate for new signal work. Map each signal → can each scanner compute it today?
    Known gap: **flap collects only transfer COUNTS, no per-swap value** → capital-eff / trade-size-variance /
    wash-price-impact NOT computable on flap without new collection. Produce this before building signals.
 8. **Backtest on our tracker + shadow-control sampling** (wave 13 method): our flap score is proven non-
