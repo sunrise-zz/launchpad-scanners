@@ -51,6 +51,10 @@ HERMES = os.path.expanduser("~/.local/bin/hermes")
 DEFAULT_TIERS = "CONFIRMED,TRENCH EARLY,TRENCH GRAD,FLAP EARLY:55"
 VERDICT_EMOJI = {"BUY-WATCH": "🟢", "NEUTRAL": "⚪️", "AVOID": "⛔"}
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
+EXIT_DISCIPLINE = (
+    "📉 Exit discipline (if entering): consider a 30% trailing stop from peak "
+    "(winner review: 8.5× fixed +50% take-profit)"
+)
 
 
 def alert_id(a):
@@ -123,6 +127,7 @@ def fmt_msg(a, v):
         f"{emoji} <b>{v['verdict']}</b> · conf {v['conf']}",
     ]
     lines += [f"• {html.escape(w)}" for w in v["whys"]]
+    lines.append(EXIT_DISCIPLINE)
     tok = a.get("token") or ""
     if tok.startswith("0x"):
         lines.append(f'<a href="{BLOCKSCOUT}{tok}">{tok[:12]}…</a>')
@@ -136,6 +141,7 @@ def fmt_section(v):
     lines = ["————————",
              f"🤖 <b>AI-DD</b> {emoji} <b>{v['verdict']}</b> · conf {v['conf']}"]
     lines += [f"• {html.escape(w)}" for w in v["whys"]]
+    lines.append(EXIT_DISCIPLINE)
     return "\n" + "\n".join(lines)
 
 

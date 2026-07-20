@@ -24,6 +24,21 @@ _STATS_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                            "..", "tracker", "data", "tier_stats.json")
 _STATS = [0.0, {}]   # [loaded_at, data] — refreshed lazily every 10 min
 
+_GRADUATION_CAUTIONS = {
+    "PUMP GRADUATING": (
+        "migration is a timing pivot, not an all-clear — 73% fell below 40% "
+        "of migration price within 20m"
+    ),
+    "TRENCH GRAD": (
+        "post-grad is a timing pivot, not an all-clear — watch the first 20m "
+        "for insider unwind"
+    ),
+    "ARC LAUNCHED": (
+        "post-grad is a timing pivot, not an all-clear — watch the first 20m "
+        "for insider unwind"
+    ),
+}
+
 
 def tier_record(tier):
     """One line of LIVE truth from the outcome tracker for this alert tier —
@@ -85,6 +100,9 @@ def compose(score, tier_emoji, tier, sym, platform, chain, pros, cons, stats, li
     ]
     lines += [f"✚ {p}" for p in pros if p]
     lines += [f"⚠️ {c}" for c in cons if c]
+    caution = _GRADUATION_CAUTIONS.get(tier)
+    if caution:
+        lines.append(f"⚠️ {caution}")
     lines += [s for s in stats if s]
     rec = tier_record(tier)
     if rec:
