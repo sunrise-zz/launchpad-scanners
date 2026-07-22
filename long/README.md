@@ -57,6 +57,15 @@ the extra five were thin rows (16–32 holders on $6–18K) this launchpad emits
 continuously. Expect **~2 EARLY/h + ~0.7 GRAD/h**. Provisional like every bar
 in this repo; refit from `data/events.jsonl` once outcomes accumulate.
 
+## Shadow controls (#9)
+
+Inherited from the shared implementation: one passed-over `pump` coin per open
+slot is recorded to `tracker/data/controls.jsonl` under platform `longxyz`,
+giving `report.py` a baseline to compute EDGE against. State in
+`data/control_slot_longxyz.json`, separate from bags' quota. See
+`bags/README.md` for the sampling design and `docs/shadow-control-sampling.md`
+for the policy.
+
 ## Usage
 
 ```bash

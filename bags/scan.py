@@ -37,6 +37,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import collections
 import html
 import json
 import os
@@ -46,6 +47,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "pons"))   # telegram + alertfmt + gmgn + outcomes
 import alertfmt  # noqa: E402
+import controls  # noqa: E402
 import gmgn  # noqa: E402
 import health  # noqa: E402
 import outcomes  # noqa: E402
@@ -82,6 +84,30 @@ HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 PAD_EMOJI = {"bags": "👜", "bankr": "🏦", "noxa": "🌀", "dyorswap": "🔄",
              "virtuals": "🤖", "longxyz": "🔭"}
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
+
+
+def sampler_registry(data_dir, k, bucket_s):
+    """Return `pad -> ControlSampler`, one quota per launchpad.
+
+    controls.py assumes one scanner covers one launchpad; this one covers five.
+    Alerts record platform=launchpad and report.py's EDGE subtracts the control
+    median of the *same* platform, so a single shared quota would spend bags'
+    hour on whichever pad happened to be busiest and leave the rest with no
+    baseline at all — an EDGE that silently can't be computed. Separate state
+    files keep the quotas independent across restarts too.
+    """
+    made = {}
+
+    def get(pad):
+        s = made.get(pad)
+        if s is None:
+            s = controls.ControlSampler(
+                pad, k=k, bucket_s=bucket_s,
+                state_path=os.path.join(data_dir, f"control_slot_{pad}.json"))
+            made[pad] = s
+        return s
+
+    return get
 
 
 def configure(name, emoji, self_pad, pads, data, bar=None):
@@ -257,6 +283,7 @@ def main():
                     help="only coins younger than this (minutes)")
     ap.add_argument("--once", action="store_true", help="one pass, print candidates, exit")
     ap.add_argument("--dry-run", action="store_true")
+    controls.add_args(ap)
     args = ap.parse_args()
     pads = [p.strip() for p in args.pads.split(",") if p.strip()]
 
@@ -282,6 +309,7 @@ def main():
             outcomes.record_alert(**record)   # only record alerts that actually sent
         print(f"[{stamp}] {'sent -> ' + label if ok else 'send FAILED (' + label + '): ' + info}", flush=True)
 
+    sampler_for = sampler_registry(DATA, args.controls_k, args.controls_bucket_s)
     seen_new = set()      # addresses already registered from new_creation
     early_sent = set()
     grad_sent = set()
@@ -297,7 +325,38 @@ def main():
                     mcap0=it.get("usd_market_cap") or it.get("market_cap"),
                     liq0=it.get("liquidity"))
 
+    def sample_control(now, pad, pool):
+        """Take one coin we evaluated and did not alert on as a control (#9).
+
+        Drawn from the `pump` section rather than `new_creation`, because that
+        is the only section this scanner makes a decision on — a new_creation
+        row is registered, never passed over. It also keeps controls at a
+        comparable point in a coin's life: sampling at mint would baseline
+        every control at age 0 against alerts that fire hours in, and the coins
+        that sit just under the bar are exactly the ones that tell us whether
+        the bar is set right.
+
+        A sampled coin can still cross the bar later and alert, leaving one
+        token in both populations — recorded rather than prevented, same as
+        flap. See docs/shadow-control-sampling.md.
+        """
+        picked = sampler_for(pad).choose(now, pool, key=lambda x: x["address"])
+        if picked is None:
+            return
+        addr = picked["address"]
+        log_event("control", addr=addr, pad=pad, sym=picked.get("symbol"),
+                  holders=picked.get("holder_count"), prog=fnum(picked, "progress"))
+        # No features= here on purpose: these alerts don't record one either, and
+        # a control carrying features its alerts lack is not a like-for-like row.
+        outcomes.record_control(pad, "ROBINHOOD",
+                                str(picked.get("symbol") or addr[:8]), addr,
+                                {"method": "gmgn", "chainSlug": "robinhood",
+                                 "address": addr},
+                                mcap0=picked.get("usd_market_cap") or picked.get("market_cap"),
+                                liq0=picked.get("liquidity"))
+
     def poll(now):
+        unalerted = collections.defaultdict(list)
         d = gmgn.trenches("robinhood", pads, limit=50)
         if not d:
             print(f"[{time.strftime('%H:%M:%S')}] trenches fetch failed", flush=True)
@@ -379,6 +438,8 @@ def main():
                           and fnum(it, "total_sell_tax") <= args.max_sell_tax
                           and (it.get("is_honeypot") or "").lower() != "yes")
                     if not ok:
+                        # evaluated and passed over — the control population (#9)
+                        unalerted[it.get("launchpad") or "trench"].append(it)
                         continue
                     early_sent.add(addr)
                     prog = fnum(it, "progress")
@@ -408,6 +469,12 @@ def main():
                               holders=it.get("holder_count"), mc=it.get("usd_market_cap"))
                     dispatch(body, f"TRENCH GRAD {it.get('symbol')}", buttons=links(it),
                              record=record_for(it, "TRENCH GRAD", score))
+            # After the section, not inside it: the quota is one draw per open
+            # slot, so it has to choose from the whole poll's passed-over set
+            # rather than spend the slot on whichever coin the loop reached first.
+            if sec == "pump" and not first:
+                for pad, pool in unalerted.items():
+                    sample_control(now, pad, pool)
             seeded.add(sec)
         health.touch(
             HEARTBEAT, NAME, now=now,
