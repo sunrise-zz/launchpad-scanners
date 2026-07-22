@@ -60,6 +60,16 @@ board (items arrive pre-enriched: smart/renowned counts, bot/rat rates,
 honeypot+tax, X followers). 🐣 TRENCH EARLY (traction bar) + 🚀 TRENCH GRAD.
 Needs `GMGN_API_KEY`. See `bags/README.md`.
 
+### `long/` — long.xyz (Robinhood Chain, stock-token launches)
+The busiest launchpad on GMGN's robinhood trenches board (~2.4 launches/min,
+graduates at $200–400K mcap). Its own API is Cloudflare-blocked to `urllib`, so
+this rides GMGN's native `longxyz` pad — which surfaces new mints ~6s old — using
+`bags/scan.py`'s implementation as a **separate instance**: sharing the bags feed
+call would have cost four other launchpads 46 of their 50 board rows. Tighter bar
+than bags (40 holders / $10K / 30%). See `long/README.md`.
+
+- `scan.py` — thin profile over the shared trench scanner
+
 ### `agent/` — Hermes AI second-opinion layer
 `analyst.py` tails the alert stream and runs **Hermes Agent** headlessly with
 the `memecoin-dd` skill on each CONFIRMED / TRENCH alert: GMGN forensics → X

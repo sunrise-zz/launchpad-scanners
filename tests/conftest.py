@@ -63,6 +63,17 @@ def bags():
     return _load("bags_scan", "bags/scan.py")
 
 
+@pytest.fixture(scope="session")
+def long_scan():
+    """long/scan.py — the bags trench implementation configured for one pad.
+
+    It reaches bags/scan.py through its own `import scan`, so the module object
+    it configures is distinct from the `bags` fixture's `bags_scan` and the two
+    instances' identities cannot bleed into each other here.
+    """
+    return _load("long_scan", "long/scan.py")
+
+
 @pytest.fixture
 def outcomes_mod(tmp_path, monkeypatch):
     """pons/outcomes.py writing to a throwaway alerts.jsonl.

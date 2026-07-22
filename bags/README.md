@@ -10,6 +10,13 @@ Found 2026-07-18 while probing the GMGN Agent API: robinhood trending surfaced
 we scan. pons/flap/flap_stocks are deliberately excluded here — the dedicated
 scanners catch those minutes earlier at the source.
 
+`longxyz` is excluded for a different reason: it runs the same implementation as
+its own instance (`long/scan.py`). GMGN returns a fixed number of rows per
+section, so pads on one instance compete for the same 50 slots — long.xyz is
+busy enough to take 46 of 50 `pump` rows and push bags 19 → 1. Adding a
+launchpad that big here would silently blind the ones already listed; give it
+its own instance instead. See `long/README.md`.
+
 ## Tiers
 
 | Tier | Source section | Fires when |
