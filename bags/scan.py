@@ -23,6 +23,10 @@ alerts and drops are logged to data/events.jsonl to refit the v1 bars once
 outcomes accumulate. Alerts record track method "gmgn" so tracker/track.py
 prices them via the same API.
 
+configure() re-points this module at a second launchpad instance with its own
+pads, bar and data dir — see long/scan.py for why a busy launchpad needs one
+instead of a seat in PADS.
+
 Detect + rank + alert only. It never trades.
 
 Usage:
@@ -47,17 +51,53 @@ import health  # noqa: E402
 import outcomes  # noqa: E402
 import telegram  # noqa: E402
 
-DATA = os.path.join(HERE, "data")
-os.makedirs(DATA, exist_ok=True)
-HEARTBEAT = os.path.join(DATA, "heartbeat.json")
+# ---- scanner identity ------------------------------------------------------
+# One implementation, one instance per *feed budget*. GMGN returns a fixed
+# number of rows per trenches section, so every launchpad sharing an instance
+# competes for the same 50 slots and a busy one starves the rest: measured
+# 2026-07-22, adding long.xyz to this list took 46 of 50 `pump` rows and pushed
+# bags from 19 to 1 — silently blinding the pads already covered here. A
+# launchpad that big gets its own instance (its own POST, data dir and
+# heartbeat) via configure(), not a seat at this one. See long/scan.py.
+NAME = "bags"
+EMOJI = "👜"
+SELF_PAD = "bags"          # the GMGN launchpad key this scanner is named after
+
+# 🐣 EARLY traction bar. v1 judgment calls, refit from data/events.jsonl once
+# outcomes accumulate. Per-instance because it has to scale with how busy the
+# board is, not just with what looks like traction: the same numbers that are
+# selective on bags pass a stream of thin rows on a launchpad minting 2.4
+# tokens/min. Overridable per run by the --min-* flags.
+BAR = {"holders": 25, "vol": 1000.0, "progress": 0.25}
 
 # launchpad_platform request keys for GMGN trenches (allow-list; empty = nothing).
 # pons / flap / flap_stocks are EXCLUDED on purpose — those launchpads are already
 # covered at source level by pons/ and flap/, which see launches minutes earlier.
 PADS = ["bags", "bankr", "noxa", "dyorswap", "virtuals_v2"]
 
-PAD_EMOJI = {"bags": "👜", "bankr": "🏦", "noxa": "🌀", "dyorswap": "🔄", "virtuals": "🤖"}
+DATA = os.path.join(HERE, "data")
+os.makedirs(DATA, exist_ok=True)
+HEARTBEAT = os.path.join(DATA, "heartbeat.json")
+
+PAD_EMOJI = {"bags": "👜", "bankr": "🏦", "noxa": "🌀", "dyorswap": "🔄",
+             "virtuals": "🤖", "longxyz": "🔭"}
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
+
+
+def configure(name, emoji, self_pad, pads, data, bar=None):
+    """Re-point this module at a second launchpad instance (see long/scan.py).
+
+    Must be called before main(). Keeps the two instances' state files apart —
+    sharing data/ would interleave two launchpads' events.jsonl and let one
+    scanner's heartbeat mask the other's outage.
+    """
+    global NAME, EMOJI, SELF_PAD, PADS, DATA, HEARTBEAT, BAR
+    NAME, EMOJI, SELF_PAD, PADS = name, emoji, self_pad, list(pads)
+    DATA = data
+    HEARTBEAT = os.path.join(DATA, "heartbeat.json")
+    os.makedirs(DATA, exist_ok=True)
+    if bar:
+        BAR = {**BAR, **bar}
 
 
 def log_event(kind, **kw):
@@ -92,8 +132,21 @@ def age_min(it, now):
 
 
 def pad_label(it):
+    """Name the scanner first, then GMGN's underlying launchpad.
+
+    Bags covers several Robinhood launchpads, so the operator-facing platform
+    label always leads with ``bags`` — an underlying value alone (``virtuals``)
+    would make these alerts indistinguishable from the separate Virtuals
+    Protocol scanner.  The launchpad follows it so a noxa or bankr coin is not
+    mistaken for a bags launch: ``👜 bags · 🌀 noxa``.
+
+    A single-launchpad instance is named after the pad it watches, so repeating
+    it would read ``🔭 long · 🔭 longxyz`` — there the scanner name stands alone.
+    """
     pad = it.get("launchpad") or "?"
-    return f"{PAD_EMOJI.get(pad, '📦')} {pad}"
+    if pad == SELF_PAD:
+        return f"{EMOJI} {NAME}"
+    return f"{EMOJI} {NAME} · {PAD_EMOJI.get(pad, '📦')} {pad}"
 
 
 def links(it):
@@ -186,9 +239,10 @@ def main():
     ap.add_argument("--interval", type=float, default=30.0, help="trenches poll (s)")
     # v1 traction bar (EARLY tier) — refit from data/events.jsonl once outcomes exist.
     ap.add_argument("--max-age-h", type=float, default=24.0, help="EARLY only for coins younger than this")
-    ap.add_argument("--min-holders", type=int, default=25)
-    ap.add_argument("--min-vol", type=float, default=1000.0, help="volume_24h USD")
-    ap.add_argument("--min-progress", type=float, default=0.25, help="curve progress 0-1")
+    ap.add_argument("--min-holders", type=int, default=BAR["holders"])
+    ap.add_argument("--min-vol", type=float, default=BAR["vol"], help="volume_24h USD")
+    ap.add_argument("--min-progress", type=float, default=BAR["progress"],
+                    help="curve progress 0-1")
     ap.add_argument("--max-sell-tax", type=float, default=0.05, help="honeypot gate (ratio)")
     ap.add_argument("--pads", default=",".join(PADS),
                     help="comma-separated launchpad_platform keys to watch")
@@ -211,7 +265,7 @@ def main():
     if not gmgn.api_key():
         print("no GMGN_API_KEY configured (~/.config/gmgn/.env) — cannot run", flush=True)
         sys.exit(1)
-    print(f"trench scanner (GMGN, robinhood)  pads={','.join(pads)}  "
+    print(f"{NAME} trench scanner (GMGN, robinhood)  pads={','.join(pads)}  "
           f"bar: holders>={args.min_holders} & vol24h>=${args.min_vol:.0f} & prog>={args.min_progress*100:.0f}% "
           f"& age<={args.max_age_h:.0f}h & sellTax<={args.max_sell_tax*100:.0f}%  "
           f"-> {'DRY-RUN' if dry else f'Telegram {chat_id}'}", flush=True)
@@ -356,7 +410,7 @@ def main():
                              record=record_for(it, "TRENCH GRAD", score))
             seeded.add(sec)
         health.touch(
-            HEARTBEAT, "bags", now=now,
+            HEARTBEAT, NAME, now=now,
             detail={"sections": sections})
         for a_ in [a_ for a_, hh in hol_hist.items() if hh and now - hh[-1][0] > 7200]:
             del hol_hist[a_]

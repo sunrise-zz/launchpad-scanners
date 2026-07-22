@@ -28,6 +28,7 @@ THRESHOLDS = {
     "virtuals": 240,
     "arc": 300,
     "bags": 240,
+    "long": 240,
     # Scheduled every six hours. A missed run is visible before the next one
     # should have completed.
     "pons-reputation": 28_800,
