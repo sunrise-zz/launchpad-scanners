@@ -58,6 +58,11 @@ def flap():
     return _load("flap_scan", "flap/scan.py")
 
 
+@pytest.fixture(scope="session")
+def bags():
+    return _load("bags_scan", "bags/scan.py")
+
+
 @pytest.fixture
 def outcomes_mod(tmp_path, monkeypatch):
     """pons/outcomes.py writing to a throwaway alerts.jsonl.

@@ -92,8 +92,18 @@ def age_min(it, now):
 
 
 def pad_label(it):
+    """Name the scanner first, then GMGN's underlying launchpad.
+
+    Bags covers several Robinhood launchpads, so the operator-facing platform
+    label always leads with ``bags`` — an underlying value alone (``virtuals``)
+    would make these alerts indistinguishable from the separate Virtuals
+    Protocol scanner.  The launchpad follows it so a noxa or bankr coin is not
+    mistaken for a bags launch: ``👜 bags · 🌀 noxa``.
+    """
     pad = it.get("launchpad") or "?"
-    return f"{PAD_EMOJI.get(pad, '📦')} {pad}"
+    if pad == "bags":
+        return "👜 bags"
+    return f"👜 bags · {PAD_EMOJI.get(pad, '📦')} {pad}"
 
 
 def links(it):
