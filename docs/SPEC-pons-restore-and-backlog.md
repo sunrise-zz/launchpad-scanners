@@ -2,6 +2,15 @@
 
 Status: ready-for-agent · Written 2026-07-19 · Supersedes the "HOW TO PICK UP" section of `docs/HANDOFF.md`
 
+> **Update 2026-07-23 — the domain moved, it did not die.** `pons.family` still does not
+> resolve, but the launchpad is serving from **`www.ponsfamily.com`** (root 308 →
+> `/launchpad`, 200). Three of the four `EP_*` routes answer there with live data —
+> `/api/pons-launches/latest`, `/api/pons-launches/recent-buys` and
+> `/api/pons-launches/graduations`; only `/api/noxa-market` is retired (410). This does
+> not change the plan below — a launchpad that silently changes hostname is the same
+> class of dependency risk as one that goes NXDOMAIN, so RPC still wins the default. It
+> does mean story 9's comparison can be run for real instead of hypothetically. See #1.
+
 ## Problem Statement
 
 The pons scanner has been silently dead for over 12 hours, and it is the scanner we
@@ -62,7 +71,7 @@ weights can be replaced by a fitted model, and then build the larger signals.
 6. As an operator, I want the scanner to resume from the last block it processed, so that recovery after a crash is automatic rather than manual.
 7. As an operator, I want the block cursor persisted to disk, so that a restart does not re-scan from genesis or skip forward past unprocessed blocks.
 8. As an operator, I want a bounded block range per poll, so that a long outage does not produce one enormous RPC request that times out and wedges the scanner.
-9. As an operator, I want the legacy HTTP discovery kept behind a switch, so that if pons.family returns we can compare both sources rather than having thrown the old path away.
+9. As an operator, I want the legacy HTTP discovery kept behind a switch, so that now the launchpad's API is reachable again (at `www.ponsfamily.com` since 2026-07-23) we can compare both sources rather than having thrown the old path away.
 10. As an operator, I want the RPC path to be the default, so that the dead dependency is not on the critical path by accident.
 11. As a developer, I want the launch records from RPC to have the same shape as the old API records, so that nothing downstream of discovery needs to change or be re-verified.
 12. As a developer, I want the token/pair ordering derived from the pair token in the event, so that buy-vs-sell classification stays correct rather than relying on an assumption.
@@ -152,8 +161,10 @@ begins at head minus the watch window rather than at genesis, so a fresh install
 not replay history.
 
 **The legacy HTTP path stays, switched off.** A source selector keeps the old
-pons.family implementation reachable for comparison if the domain returns. RPC is the
-default. The dead path must not be on the critical path.
+pons.family implementation reachable for comparison. RPC is the default. A path we do
+not control must not be on the critical path — which the 2026-07-23 discovery reinforces
+rather than weakens: the API came back at a *different hostname*, so pointing the switch
+at it means editing `BASE` (`pons/api.py:35`), not merely flipping `DISCOVERY_SOURCE`.
 
 **Health-checking is a shared concern, not a pons one.** Each scanner records the time
 of its last successful ingest. A watchdog alerts once when that exceeds a per-scanner
