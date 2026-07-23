@@ -1,14 +1,16 @@
 # bags/ — GMGN Trenches scanner (uncovered Robinhood-chain launchpads)
 
-Watches the launchpads on Robinhood Chain that the six source-level scanners
-**don't** cover — `bags`, `bankr`, `noxa`, `dyorswap` and virtuals-on-robinhood
+Watches the launchpads on Robinhood Chain that the source-level scanners
+**don't** cover — `bags`, `bankr`, `dyorswap` and virtuals-on-robinhood
 (`virtuals/scan.py` only sees the BASE/SOLANA app API) — via GMGN's Trenches
 board (`pons/gmgn.py trenches()`, one authed POST per poll, no RPC).
 
 Found 2026-07-18 while probing the GMGN Agent API: robinhood trending surfaced
 `bags` coins (RobinHub, $157K mcap, 414 holders) that never appear in any feed
 we scan. pons/flap/flap_stocks are deliberately excluded here — the dedicated
-scanners catch those minutes earlier at the source.
+scanners catch those minutes earlier at the source. `noxa` was dropped
+2026-07-23: GMGN's `noxa` key is the dead V1 factory, and live noxa V2 is now
+covered at source level by `noxa/` (GMGN files V2 under `noxafi`).
 
 `longxyz` is excluded for a different reason: it runs the same implementation as
 its own instance (`long/scan.py`). GMGN returns a fixed number of rows per

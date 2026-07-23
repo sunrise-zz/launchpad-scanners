@@ -1,6 +1,10 @@
 """GMGN Trenches scanner — Robinhood-chain launchpads the other scanners
-don't cover: bags, bankr, noxa, dyorswap, and virtuals-on-robinhood
+don't cover: bags, bankr, dyorswap, and virtuals-on-robinhood
 (virtuals/scan.py watches the app.virtuals.io API, which is BASE/SOLANA only).
+
+noxa is deliberately absent: GMGN's `noxa` key is the dead V1 factory (dormant
+since 2026-07-18), and live noxa V2 has its own source-level scanner in noxa/
+(GMGN files V2 under a different key, `noxafi`). See noxa/README.md.
 
 Discovered 2026-07-18 while testing the GMGN Agent API: the robinhood
 trending/trenches feeds surfaced coins from launchpads none of our six
@@ -75,13 +79,16 @@ BAR = {"holders": 25, "vol": 1000.0, "progress": 0.25}
 # launchpad_platform request keys for GMGN trenches (allow-list; empty = nothing).
 # pons / flap / flap_stocks are EXCLUDED on purpose — those launchpads are already
 # covered at source level by pons/ and flap/, which see launches minutes earlier.
-PADS = ["bags", "bankr", "noxa", "dyorswap", "virtuals_v2"]
+# noxa is EXCLUDED too: GMGN's `noxa` key is the dead V1, and live noxa V2 is
+# covered at source level by noxa/ (GMGN files V2 under `noxafi`, not requested
+# here because noxa/ sees it first and more completely).
+PADS = ["bags", "bankr", "dyorswap", "virtuals_v2"]
 
 DATA = os.path.join(HERE, "data")
 os.makedirs(DATA, exist_ok=True)
 HEARTBEAT = os.path.join(DATA, "heartbeat.json")
 
-PAD_EMOJI = {"bags": "👜", "bankr": "🏦", "noxa": "🌀", "dyorswap": "🔄",
+PAD_EMOJI = {"bags": "👜", "bankr": "🏦", "dyorswap": "🔄",
              "virtuals": "🤖", "longxyz": "🔭"}
 BLOCKSCOUT = "https://robinhoodchain.blockscout.com/token/"
 
@@ -163,8 +170,8 @@ def pad_label(it):
     Bags covers several Robinhood launchpads, so the operator-facing platform
     label always leads with ``bags`` — an underlying value alone (``virtuals``)
     would make these alerts indistinguishable from the separate Virtuals
-    Protocol scanner.  The launchpad follows it so a noxa or bankr coin is not
-    mistaken for a bags launch: ``👜 bags · 🌀 noxa``.
+    Protocol scanner.  The launchpad follows it so a bankr or dyorswap coin is
+    not mistaken for a bags launch: ``👜 bags · 🏦 bankr``.
 
     A single-launchpad instance is named after the pad it watches, so repeating
     it would read ``🔭 long · 🔭 longxyz`` — there the scanner name stands alone.

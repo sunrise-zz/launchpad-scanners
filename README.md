@@ -32,12 +32,10 @@ Real-world precision ~30% (41% out-of-time), ~55× the 0.54% base rate, fires
 - `backtest_multifactor.py`, `collect_onchain.py` — how the rule was found
 - `scan.py` / `alert.py` — earlier velocity-only versions
 
-### `vlad/` — vlad.fun (bonding curve)
-Unverified pump contract; events recovered from raw logs. Signal is **early buy
-momentum** (distinct non-dev buyers + buy volume in the first 30–120s).
-
-- `scan.py` — live on-chain scanner
-- `run_backtest.py`, `lead_time.py` — logic search + lead-time proof
+### `vlad/` — shared Robinhood Chain RPC helper (not a scanner)
+Stdlib JSON-RPC + event decoding against the QuickNode Robinhood endpoint,
+imported by `pons/` and `flap/`. Named after vlad.fun, whose scanner and
+backtest harness were removed; only `rpc.py` remains.
 
 ### `virtuals/` — Virtuals Protocol (AI agents, Base + Solana)
 Fully open Strapi API with premium fields (mindshare, holder growth %, dev/top10
@@ -55,10 +53,22 @@ concentration, curve reserve → graduation progress). 🐣 EARLY traction +
 
 ### `bags/` — GMGN trench scanner (uncovered Robinhood launchpads)
 Watches the Robinhood-chain launchpads none of the source scanners cover —
-**bags, bankr, noxa, dyorswap, virtuals-on-robinhood** — via GMGN's Trenches
+**bags, bankr, dyorswap, virtuals-on-robinhood** — via GMGN's Trenches
 board (items arrive pre-enriched: smart/renowned counts, bot/rat rates,
 honeypot+tax, X followers). 🐣 TRENCH EARLY (traction bar) + 🚀 TRENCH GRAD.
-Needs `GMGN_API_KEY`. See `bags/README.md`.
+Needs `GMGN_API_KEY`. See `bags/README.md`. (`noxa` was dropped 2026-07-23 —
+GMGN's `noxa` key is the dead V1; live noxa V2 has its own scanner in `noxa/`.)
+
+### `noxa/` — noxa (Robinhood Chain), source-level via noxa.fi
+noxa died (noxa.fun went NXDOMAIN 2026-07-18) and relaunched at **noxa.fi** on a
+new factory ~2026-07-22 — the same domain-move pons made — immediately running
+busier than pons (~205 launches/h). GMGN can't see the new factory (its `noxa`
+key is the dead V1; V2 lives under `noxafi`), but noxa.fi ships a clean public
+API (no auth, 240 req/min), so this is a **source-level** scanner, not a trench
+rider. 🐣 NOXA EARLY (holders+volume bar — *not* the misleading `graduationPct`)
++ 🚀 NOXA GRAD. No API key. See `noxa/README.md` and `docs/research/noxa-fi-api.md`.
+
+- `scan.py` — live API scanner (no RPC needed)
 
 ### `long/` — long.xyz (Robinhood Chain, stock-token launches)
 The busiest launchpad on GMGN's robinhood trenches board (~2.4 launches/min,
@@ -111,11 +121,6 @@ own `isLowRisk` (FAC) flag. See `flap/README.md`.
 # pons
 python3 pons/collect.py            # on-chain graduation + reputation refresh
 python3 pons/alert_pro.py --dry-run   # multi-factor scanner, print alerts
-
-# vlad
-python3 vlad/collect.py
-python3 vlad/run_backtest.py
-python3 vlad/scan.py --once
 ```
 
 Pure stdlib Python 3 — no dependencies.
@@ -150,7 +155,7 @@ from the measured medians in `docs/research-notes-raw.md` (waves 20-24).
 
 ## Data
 
-Small derived artifacts (best_logic, smart_wallets, graduations, reputation) are
+Small derived artifacts (smart_wallets, graduations, reputation) are
 committed. Large raw datasets (full launch lists, event/swap dumps) are gitignored
 — regenerate them with each folder's `collect*.py`.
 

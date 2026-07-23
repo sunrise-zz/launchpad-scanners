@@ -18,6 +18,7 @@ Price sources are chosen per alert by its `track` dict:
     virtuals     -> api2.virtuals.io/api/virtuals/{id}   (mcap in VIRTUAL)
     gmgn         -> openapi.gmgn.ai token/info (needs GMGN_API_KEY; used by
                     bags/scan.py whose pads DexScreener may not index)
+    noxa         -> api.noxa.fi token detail (noxa V2, invisible to gmgn+dexscreener)
 
 Idempotent and resumable: a (alert_id, horizon) already in snapshots.jsonl is
 never re-sampled, so restarts and the 24/7 LaunchAgent are safe.
@@ -120,6 +121,15 @@ def snap_flap(addr):
             "liq": (d or {}).get("liquidity")}
 
 
+def snap_noxa(addr):
+    # noxa V2 (noxa.fi) is invisible to both GMGN and DexScreener — its own API
+    # is the only live price source (see noxa/scan.py). No liquidity field on the
+    # curve row; mcap carries the outcome, as it does for the virtuals curve.
+    d = fetch_json(f"https://api.noxa.fi/api/tokens/{addr}")
+    return {"price": (d or {}).get("priceUsd"), "mcap": (d or {}).get("marketCapUsd"),
+            "liq": None}
+
+
 def take_snapshot(track):
     """Dispatch to the right price source. Returns dict or None (never raises)."""
     try:
@@ -134,6 +144,8 @@ def take_snapshot(track):
             return snap_pumpfun(track["address"])
         if m == "flap":
             return snap_flap(track["address"])
+        if m == "noxa":
+            return snap_noxa(track["address"])
         if m == "gmgn":
             return snap_gmgn(track.get("chainSlug") or "robinhood", track["address"])
     except Exception:  # noqa: BLE001

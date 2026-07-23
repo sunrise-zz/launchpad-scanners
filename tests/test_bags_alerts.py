@@ -4,14 +4,16 @@
 def test_bags_alerts_do_not_impersonate_the_underlying_launchpad(bags):
     # Leading with "bags" keeps a virtuals-on-robinhood alert distinguishable
     # from the separate Virtuals Protocol scanner.
-    for pad in ("virtuals", "bankr", "noxa", "dyorswap"):
+    for pad in ("virtuals", "bankr", "dyorswap"):
         assert bags.pad_label({"launchpad": pad}).startswith("👜 bags · ")
 
 
 def test_bags_alerts_name_the_underlying_launchpad(bags):
-    # HOODFATHER bonded on noxa but read as a bags launch (Jul 22).
-    assert "noxa" in bags.pad_label({"launchpad": "noxa"})
+    # The underlying pad is named so a bankr/dyorswap coin isn't read as a bare
+    # bags launch — the way HOODFATHER-on-noxa was before this landed (Jul 22).
+    # (noxa itself is no longer a bags pad; live V2 has its own scanner.)
     assert "bankr" in bags.pad_label({"launchpad": "bankr"})
+    assert "dyorswap" in bags.pad_label({"launchpad": "dyorswap"})
 
 
 def test_bags_launch_is_not_labelled_twice(bags):
