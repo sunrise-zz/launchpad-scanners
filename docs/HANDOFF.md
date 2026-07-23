@@ -36,6 +36,12 @@ sources live in the other docs; this is what to act on.
   either retire the scanner or rebuild its feed on RPC — wave 21 already reconstructed full launch-time
   factors from QuickNode RPC + Blockscout alone, so an API-free pons path is proven feasible.
   Robinhood chain RPC (QuickNode) + Blockscout were UP.
+  → **Resolved 2026-07-23: "gone//renamed" was right — renamed.** The launchpad serves from
+  `www.ponsfamily.com` (`ponsfamily.com` 308 → `/launchpad`, 200); `pons.family` is still 000 and is not
+  coming back. `/api/pons-launches/{latest,recent-buys,graduations}` all return live data there;
+  `/api/noxa-market` is retired (410). The factory never stopped: `0xA5aAb3F0c6EeadF30Ef1D3Eb997108E976351feB`
+  keeps processing `launchToken`. Do **not** read this as "just point BASE at the new host and we are done" —
+  see `docs/SPEC-pons-restore-and-backlog.md` and #1 for why RPC still takes the default.
 
 ---
 

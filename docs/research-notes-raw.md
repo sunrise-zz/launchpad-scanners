@@ -214,6 +214,16 @@ social_not_duplicate (copycat detection).
 Zora factory fixed `0xf74b146ce44cc162b601dec3be331784db111dc1`), Robinhood other pads: LaunchHood/
 RobinPad/Openfair (Uniswap V3 pool-creation events; NOXA Fun DEAD — shut down Jul 2026).
 
+> Correction 2026-07-23: NOXA's *web layer* died — its factory
+> `0xD9eC2db5f3D1b236843925949fe5bd8a3836FCcB` was deployed 2026-06-16, has 93,430 txs, and
+> ran `launchToken` until 2026-07-18 03:47 UTC, the day the DNS records were deleted. Dormant,
+> not undeployed: a probe of only the last 2,000 blocks saw zero events and wrongly concluded
+> "never deployed". Coins launched before the shutdown keep bonding — HOODFATHER launched
+> 2026-07-11 and graduated 2026-07-22 — so GMGN's `noxa` pad label is trustworthy. Pons is a
+> fork of these contracts (same selector `0x686399cb`, same compiler), which is why both
+> factories emit the same `TokenLaunched` topic0; on this chain **only the factory address
+> identifies the launchpad**. Never infer contract liveness from frontend liveness. See #16.
+
 **TIER 3 (dead/hype, skip)**: Believe/LAUNCHCOIN (dead, $233/24h), Boop (faded), Daos.fun/Time.fun
 (dormant), Sun Pump (Tron), Four.meme (BSC).
 
