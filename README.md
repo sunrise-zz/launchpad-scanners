@@ -70,6 +70,23 @@ rider. 🐣 NOXA EARLY (holders+volume bar — *not* the misleading `graduationP
 
 - `scan.py` — live API scanner (no RPC needed)
 
+### `potato/` — potato.fm "Potato Pad" (Robinhood Chain), source-level
+A Robinhood-chain launchpad **aggregator** (several pad factories, `kind`
+`direct`/`curve`) that plants coins straight into a locked Uniswap V3 position,
+live from block one. Its own Next.js origin ships an open, urllib-reachable API
+(not Cloudflare-walled like long.xyz), and the pad is small enough (~60 tokens
+all-time) that one page of `/api/tokens` *is* the complete board — so this is a
+source-level scanner with 100% coverage, not a trench rider. The Growing feed's
+only per-token traction is `volume24Usd` (socials inline; no holders/mcap — the
+site derives mcap from the V3 pool over RPC), so the bar is **volume + age**;
+the `/api/ancient` feed is richer (fdv/liquidity) and drives the GRAD tier.
+🥔 POTATO EARLY (young coin crossing the volume bar) + 🚀 POTATO GRAD (surfaces
+in Ancients on a real WETH pool). No API key. Prices outcomes via the shared
+`gmgn` snap (potato coins are gmgn-indexable V3 tokens). See `potato/README.md`
+and `docs/research/potato-fm-api.md`.
+
+- `scan.py` — live API scanner (no RPC needed)
+
 ### `long/` — long.xyz (Robinhood Chain, stock-token launches)
 The busiest launchpad on GMGN's robinhood trenches board (~2.4 launches/min,
 graduates at $200–400K mcap). Its own API is Cloudflare-blocked to `urllib`, so
